@@ -45,9 +45,8 @@ export function applyAskAgain(replies, lowConfidence) {
   return next.slice(0, 4);
 }
 
-export function isLowConfidence(alternatives) {
-  if (!alternatives?.length) return false;
-  const top = alternatives[0];
-  if (!Number.isFinite(top.confidence)) return false;
-  return top.confidence < LOW_CONFIDENCE;
+/** Chrome sometimes reports 0 when it has no score; treat that as unknown, not low. */
+export function isLowConfidence(confidence) {
+  if (!Number.isFinite(confidence) || confidence === 0) return false;
+  return confidence > 0 && confidence < LOW_CONFIDENCE;
 }

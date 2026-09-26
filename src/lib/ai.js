@@ -1,14 +1,16 @@
 import { guessCategory, normalizeCategory, offlineReplies, offlineSuggest } from "./offline";
 
 async function requestSuggestions(body) {
+  const t0 = performance.now();
   const res = await fetch("/api/suggest", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
+  const ms = performance.now() - t0;
   if (!res.ok) {
-    throw new Error(data.detail || data.error || `suggest failed (${res.status})`);
+    throw Object.assign(new Error(data.detail || data.error || `suggest failed (${res.status})`), { ms });
   }
   if (Array.isArray(data.replies) && data.replies.length >= 4) {
     return {
@@ -16,26 +18,33 @@ async function requestSuggestions(body) {
       category: normalizeCategory(data.category || guessCategory(body.heard)),
       source: data.source || "ai",
       facts: Array.isArray(data.facts) ? data.facts : [],
+      ms,
     };
   }
-  throw new Error("bad payload");
+  throw Object.assign(new Error("bad payload"), { ms });
 }
 
 function memoryFields(body) {
   return {
     facts: body.facts,
     summaries: body.summaries,
-    alternatives: body.alternatives,
     lowConfidence: body.lowConfidence,
   };
 }
 
 export async function fetchSuggestions({ profile, heard, history, provider, customPrompt, ...memory }) {
   try {
-    return await requestSuggestions({ profile, heard, history, provider, customPrompt, ...memoryFields(memory) });
+    return await requestSuggestions({
+      profile,
+      heard,
+      history: (history || []).slice(-6),
+      provider,
+      customPrompt,
+      ...memoryFields(memory),
+    });
   } catch (err) {
     console.error("AI suggest failed", err);
-    return { ...offlineSuggest(heard), error: String(err.message || err) };
+    return { ...offlineSuggest(heard), error: String(err.message || err), ms: err.ms || 0 };
   }
 }
 
@@ -54,7 +63,6 @@ export async function fetchNewSuggestions({
   avoid,
   facts,
   summaries,
-  alternatives,
   lowConfidence,
 }) {
   const seen = new Set(avoid.map(replyKey));
@@ -72,16 +80,18 @@ export async function fetchNewSuggestions({
   let source = "offline";
   let error = "";
   let extraFacts = [];
+  let suggestMs = 0;
   try {
     const result = await requestSuggestions({
       profile,
       heard,
-      history,
+      history: (history || []).slice(-6),
       provider,
       customPrompt,
       avoid,
-      ...memoryFields({ facts, summaries, alternatives, lowConfidence }),
+      ...memoryFields({ facts, summaries, lowConfidence }),
     });
+    suggestMs = result.ms;
     take(result.replies);
     category = result.category;
     source = result.source;
@@ -89,11 +99,12 @@ export async function fetchNewSuggestions({
   } catch (err) {
     console.error("AI refresh failed", err);
     error = String(err.message || err);
+    suggestMs = err.ms || 0;
   }
   take(offlineReplies(heard));
 
-  if (fresh.length < 4) return { replies: null, error: error || "no different replies found" };
-  return { replies: fresh, category, source, error, facts: extraFacts };
+  if (fresh.length < 4) return { replies: null, error: error || "no different replies found", ms: suggestMs };
+  return { replies: fresh, category, source, error, facts: extraFacts, ms: suggestMs };
 }
 
 export async function fetchSummary({ profile, history, facts }) {

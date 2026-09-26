@@ -7,7 +7,8 @@ import { quadrantToIndex } from "./lib/joystick";
 import {
   browserSpeak,
   createListener,
-  grokSpeak,
+  createVoiceCache,
+  logTiming,
   previewSpeak,
   speechRecognitionSupported,
   stopPreview,
@@ -44,7 +45,7 @@ export default function App() {
   const [typedHeard, setTypedHeard] = useState("");
   const [repliesVersion, setRepliesVersion] = useState(0);
   const [showCustomEditor, setShowCustomEditor] = useState(false);
-  const [heardAlts, setHeardAlts] = useState([]);
+  const [heardConfidence, setHeardConfidence] = useState(1);
 
   const historyRef = useRef([]);
   const listenerRef = useRef(null);
@@ -64,9 +65,12 @@ export default function App() {
   const speakingRef = useRef(false);
   const micHoldRef = useRef(0);
   const sampleListenersRef = useRef(new Set());
-  const heardAltsRef = useRef([]);
+  const heardConfidenceRef = useRef(1);
   const lastActivityRef = useRef(Date.now());
   const endingRef = useRef(false);
+  const voiceCacheRef = useRef(null);
+  const recognizeMsRef = useRef(0);
+  if (!voiceCacheRef.current) voiceCacheRef.current = createVoiceCache();
 
   settingsRef.current = settings;
   selectedRef.current = selected;
@@ -82,14 +86,43 @@ export default function App() {
   tilesRef.current = tiles;
 
   const persist = (next) => { setSettings(next); saveSettings(next); };
+  const gridRef = useRef(null);
+  const [resizing, setResizing] = useState(false);
+
+  const replyPanePx = Math.max(220, Number(settings.replyPanePx) || 320);
+
+  const onSplitterPointerDown = useCallback((event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    const grid = gridRef.current;
+    if (!grid) return;
+    const startX = event.clientX;
+    const startWidth = grid.querySelector(".reply-pane")?.getBoundingClientRect().width || replyPanePx;
+    const gridWidth = grid.getBoundingClientRect().width;
+    const clamp = (px) => {
+      const max = Math.max(220, Math.round((gridWidth - 12) * 0.55));
+      return Math.min(max, Math.max(220, Math.round(px)));
+    };
+
+    setResizing(true);
+    const onMove = (ev) => {
+      persist({ ...settingsRef.current, replyPanePx: clamp(startWidth + (startX - ev.clientX)) });
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [persist, replyPanePx]);
 
   function suggestContext() {
     const s = settingsRef.current;
     return {
       facts: (s.facts || []).map((line) => String(line).trim()).filter(Boolean),
-      summaries: (s.summaries || []).map((row) => row.text).filter(Boolean).slice(-8),
-      alternatives: heardAltsRef.current,
-      lowConfidence: isLowConfidence(heardAltsRef.current),
+      summaries: (s.summaries || []).map((row) => row.text).filter(Boolean).slice(-3),
+      lowConfidence: isLowConfidence(heardConfidenceRef.current),
     };
   }
 
@@ -160,7 +193,7 @@ export default function App() {
     setStatus(`Speaking: ${text}`);
     try {
       if (settingsRef.current.voice === "grok") {
-        try { await grokSpeak(text); } catch { await browserSpeak(text); }
+        try { await voiceCacheRef.current.play(text); } catch { await browserSpeak(text); }
       } else {
         await browserSpeak(text);
       }
@@ -171,6 +204,24 @@ export default function App() {
       bleRef.current?.pingLed();
     }
   }, [holdMic, releaseMic]);
+
+  useEffect(() => {
+    const cache = voiceCacheRef.current;
+    if (settings.voice !== "grok") {
+      cache.clearReplies();
+      cache.clearCustom();
+      return undefined;
+    }
+    cache.clearReplies();
+    cache.prefetch(suggestions);
+    return undefined;
+  }, [suggestions, settings.voice]);
+
+  useEffect(() => {
+    if (settings.voice !== "grok") return undefined;
+    voiceCacheRef.current.prefetchCustom(settings.custom || []);
+    return undefined;
+  }, [settings.custom, settings.voice]);
 
   useEffect(() => {
     if (!settings.readOptions || showSettings || showCustomEditor || selected < 0) {
@@ -200,6 +251,8 @@ export default function App() {
       ...ctx,
     });
     if (requestId !== requestIdRef.current) return;
+    logTiming("speech recognition (after talk stopped)", recognizeMsRef.current);
+    logTiming("suggest", result.ms || 0, `via ${result.source}`);
     rememberFacts(result.facts);
     setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
     setCategory(result.category || "Chat");
@@ -240,9 +293,11 @@ export default function App() {
     if (requestId !== requestIdRef.current) return;
     setBusy(false);
     if (!result.replies) {
+      logTiming("suggest", result.ms || 0, result.error || "kept old replies");
       setStatus(`Couldn't get new replies, kept these · ${result.error}`);
       return;
     }
+    logTiming("suggest", result.ms || 0, `via ${result.source}`);
     rememberFacts(result.facts);
     rejectedRef.current = avoid;
     setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
@@ -256,22 +311,22 @@ export default function App() {
   const onHeard = useCallback((payload) => {
     const text = typeof payload === "string" ? payload : payload?.text;
     if (!text) return;
-    const alternatives = typeof payload === "string"
-      ? [{ text, confidence: 1 }]
-      : (payload.alternatives?.length ? payload.alternatives : [{ text, confidence: 0 }]);
+    const confidence = typeof payload === "string" ? 1 : Number(payload.confidence);
+    recognizeMsRef.current = typeof payload === "string" ? 0 : Number(payload.recognizeMs) || 0;
     lastActivityRef.current = Date.now();
-    heardAltsRef.current = alternatives;
-    setHeardAlts(alternatives);
+    heardConfidenceRef.current = Number.isFinite(confidence) ? confidence : 0;
+    setHeardConfidence(heardConfidenceRef.current);
     setHeard(text);
     setInterim("");
     historyRef.current = [...historyRef.current, `Other: ${text}`].slice(-8);
     requestReplies(text);
   }, [requestReplies]);
+  const onHeardRef = useRef(onHeard);
+  onHeardRef.current = onHeard;
 
-  // Create listener and auto-start mic
   useEffect(() => {
     const listener = createListener({
-      onFinal: onHeard,
+      onFinal: (payload) => onHeardRef.current(payload),
       onInterim: (text) => {
         lastActivityRef.current = Date.now();
         setInterim(text);
@@ -279,15 +334,8 @@ export default function App() {
       onError: (err) => setStatus(`Mic: ${err}`),
     });
     listenerRef.current = listener;
-
-    if (speechRecognitionSupported()) {
-      listener.start();
-      setListening(true);
-      setStatus("Listening…");
-    }
-
     return () => listener.stop();
-  }, [onHeard]);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -513,14 +561,6 @@ export default function App() {
         <div className="caregiver-btns">
           <button
             type="button"
-            className={listening ? "live" : ""}
-            onClick={toggleListen}
-            title="Toggle mic (L)"
-          >
-            {listening ? "🎙 On" : "🎙 Off"}
-          </button>
-          <button
-            type="button"
             onClick={connectBle}
             disabled={!bluetoothSupported() || bleState === "connecting"}
             title="Connect joystick"
@@ -534,21 +574,38 @@ export default function App() {
         </div>
       </header>
 
-      <div className="main-grid">
+      <div
+        className={`main-grid${resizing ? " is-resizing" : ""}`}
+        ref={gridRef}
+        style={{ "--reply-w": `${replyPanePx}px` }}
+      >
         {/* Left pane: wheel */}
         <div className="wheel-pane">
-          <Wheel
-            key={repliesVersion}
-            items={tiles}
-            selected={selected}
-            onChoose={(index) => { setSelected(index); activate(index); }}
-            onHover={settings.readOptions && !settings.scanning ? setSelected : undefined}
-            onHubSelect={() => activate(selectedRef.current)}
-            onHubHold={toggleCustomWheel}
-            busy={busy}
-            speaking={speaking}
-            listening={listening}
-          />
+          <div className="wheel-stage">
+            <button
+              type="button"
+              className={`mic-toggle${listening ? " is-on" : ""}`}
+              onClick={toggleListen}
+              title="Toggle mic (L)"
+              aria-pressed={listening}
+            >
+              <span className="mic-icon" aria-hidden="true">🎙</span>
+              <span className="mic-label">{listening ? "Mic On" : "Mic Off"}</span>
+              <span className="mic-hint">{listening ? "Listening" : "Click to listen"}</span>
+            </button>
+            <Wheel
+              key={repliesVersion}
+              items={tiles}
+              selected={selected}
+              onChoose={(index) => { setSelected(index); activate(index); }}
+              onHover={settings.readOptions && !settings.scanning ? setSelected : undefined}
+              onHubSelect={() => activate(selectedRef.current)}
+              onHubHold={toggleCustomWheel}
+              busy={busy}
+              speaking={speaking}
+              listening={listening}
+            />
+          </div>
           <div className="meta">
             {speaking && <span className="pill live">Speaking</span>}
             {busy && <span className="pill">Thinking</span>}
@@ -557,6 +614,15 @@ export default function App() {
           </div>
         </div>
 
+        <button
+          type="button"
+          className="pane-splitter"
+          aria-label="Resize transcript"
+          aria-orientation="vertical"
+          title="Drag to resize the transcript"
+          onPointerDown={onSplitterPointerDown}
+        />
+
         {/* Right pane: heard + replies */}
         <div className="reply-pane">
           <div className="heard-block">
@@ -564,19 +630,7 @@ export default function App() {
             <p className="heard-text">
               {interim || heard || <span className="muted">waiting…</span>}
             </p>
-            {!interim && heardAlts.length > 1 && (
-              <ul className="heard-alts">
-                {heardAlts.map((alt) => (
-                  <li key={alt.text}>
-                    {alt.text}
-                    {Number.isFinite(alt.confidence) && alt.confidence > 0 && (
-                      <span>{Math.round(alt.confidence * 100)}%</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {!interim && isLowConfidence(heardAlts) && (
+            {!interim && isLowConfidence(heardConfidence) && (
               <p className="heard-warn">Low confidence — the mic may have misheard this.</p>
             )}
           </div>
@@ -660,8 +714,9 @@ export default function App() {
               AI provider
               <select value={settings.provider}
                 onChange={(e) => persist({ ...settings, provider: e.target.value })}>
-                <option value="grok">Grok first, then ChatGPT</option>
-                <option value="openai">ChatGPT first, then Grok</option>
+                <option value="race">Both at once (faster, costs more)</option>
+                <option value="grok">One at a time: Grok, then ChatGPT</option>
+                <option value="openai">One at a time: ChatGPT, then Grok</option>
               </select>
             </label>
             <label>

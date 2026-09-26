@@ -97,30 +97,131 @@ button.live:hover:not(:disabled) {
 /* === Main grid: 60/40 split — wheel gets more room === */
 .main-grid {
   display: grid;
-  grid-template-columns: 3fr 1fr;
+  grid-template-columns: minmax(0, 1fr) 12px var(--reply-w, 320px);
   overflow: hidden;
   min-height: 0;
 }
 
+.main-grid.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.pane-splitter {
+  width: 12px;
+  padding: 0;
+  border: none;
+  border-left: 1px solid #e4e4e4;
+  border-right: 1px solid #e4e4e4;
+  border-radius: 0;
+  background: #f3f4f6;
+  cursor: col-resize;
+  align-self: stretch;
+}
+
+.pane-splitter::after {
+  content: "";
+  display: block;
+  width: 3px;
+  height: 42px;
+  margin: 42vh auto 0;
+  border-radius: 999px;
+  background: #9ca3af;
+}
+
+.pane-splitter:hover,
+.main-grid.is-resizing .pane-splitter {
+  background: #e5e7eb;
+}
+
+.pane-splitter:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
 /* === Left pane: wheel === */
 .wheel-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 10px 12px;
-  border-right: 1px solid #e4e4e4;
-  gap: 8px;
+  padding: 4px 6px 6px;
+  gap: 0;
   overflow: hidden;
+}
+
+.wheel-stage {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 20px;
+  padding-right: 10px;
+  gap: 12px;
+  min-height: 0;
+  width: 100%;
+  flex: 1;
+}
+
+.mic-toggle {
+  flex-shrink: 0;
+  width: 148px;
+  height: min(280px, calc(100vh - 220px));
+  min-height: 200px;
+  padding: 20px 14px;
+  border-radius: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 1.05rem;
+  line-height: 1.15;
+  border-width: 2px;
+}
+
+.mic-toggle .mic-icon {
+  font-size: 3.2rem;
+  line-height: 1;
+}
+
+.mic-toggle .mic-label {
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.mic-toggle .mic-hint {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.mic-toggle.is-on {
+  background: #171717;
+  color: #ef4444;
+  border-color: #171717;
+}
+
+.mic-toggle.is-on .mic-hint {
+  color: #f87171;
+}
+
+.mic-toggle:hover:not(:disabled) {
+  transform: translateY(-2px);
 }
 
 /* === Meta pills === */
 .meta {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: center;
-  flex-shrink: 0;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .pill {
@@ -152,10 +253,13 @@ button.live:hover:not(:disabled) {
 /* === Wheel === */
 .wheel {
   position: relative;
-  /* 60% of viewport width minus padding, constrained by available height */
-  width: min(calc(60vw - 44px), calc(100vh - 160px));
-  aspect-ratio: 1;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  height: 100%;
+  width: auto;
+  aspect-ratio: 1 / 1;
+  max-height: min(100%, calc(100vh - 72px));
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .wheel-svg {
@@ -450,10 +554,11 @@ button.live:hover:not(:disabled) {
 .reply-pane {
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 12px;
+  padding: 14px 18px 12px;
   gap: 12px;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 .heard-block {
@@ -480,29 +585,6 @@ button.live:hover:not(:disabled) {
 }
 
 .muted { color: #9ca3af; font-weight: 400; }
-
-.heard-alts {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.heard-alts li {
-  font-size: 0.85rem;
-  color: #6b7280;
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.heard-alts span {
-  font-variant-numeric: tabular-nums;
-  color: #9ca3af;
-  flex-shrink: 0;
-}
 
 .heard-warn {
   margin: 8px 0 0;
@@ -886,14 +968,32 @@ button.live:hover:not(:disabled) {
     overflow-y: auto;
   }
 
+  .pane-splitter { display: none; }
+
   .wheel-pane {
     border-right: none;
     border-bottom: 1px solid #e4e4e4;
     padding: 12px;
   }
 
+  .wheel-stage {
+    padding-left: 10px;
+    gap: 8px;
+  }
+
+  .mic-toggle {
+    width: 92px;
+    min-height: 120px;
+    height: 120px;
+    padding: 12px 8px;
+    border-radius: 24px;
+  }
+
+  .mic-toggle .mic-icon { font-size: 2rem; }
+  .mic-toggle .mic-label { font-size: 0.95rem; }
+
   .wheel {
-    width: min(92vw, 380px);
+    width: min(calc(92vw - 110px), 380px);
   }
 
   .heard-text { font-size: 2rem; }

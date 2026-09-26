@@ -30,25 +30,13 @@ const XAI_TTS_URL = "https://api.x.ai/v1/tts";
 
 const CATEGORIES = ["Food", "Feelings", "People", "Help", "Chat"];
 
-const SYSTEM_PROMPT = `You generate replies for a nonverbal person using an AAC communication board.
-Return ONLY JSON, no markdown, no labels:
-{"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","...","..."],"facts":["label: value"]}
-Pick category from what the other person just said:
-- Food: eating, drinking, meals, hunger, thirst
-- Feelings: mood, pain, energy, how they are
-- People: family, friends, staff, who is present
-- Help: bathroom, emergency, position, discomfort, stop
-- Chat: anything else, small talk, choices, general talk
-Each reply is a short first-person spoken line, under 10 words.
-The 4 replies MUST cover different intents, not rewordings:
-1) agree / accept
-2) decline / not that
-3) ask a question back or something specific from the profile or remembered facts
-4) a neutral, clarifying, or topic-shifting response
-The transcript may contain speech-recognition mistakes. Use the conversation history, remembered facts, and any alternative transcripts to work out what was most likely meant, then reply to that meaning.
-If speech-recognition confidence is marked low, one of the 4 replies MUST be exactly: Can you say that again?
-If you learn a lasting fact about the user (preference, person, routine), add it to "facts" as a short "label: value" string. Only new or updated facts, not ones already listed. If nothing new, use "facts":[].
-Sound like a real person, not a robot.`;
+const SYSTEM_PROMPT = `Write 4 short first-person AAC replies for a nonverbal person.
+JSON only: {"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","...","..."],"facts":[]}
+category: Food meals/drink, Feelings mood/pain, People family/staff, Help bathroom/emergency/stop, else Chat.
+replies: under 10 words, four different intents — accept, decline, ask or specific, clarify or shift.
+Transcripts can be wrong; use history and facts to infer meaning.
+If confidence is low, one reply must be exactly: Can you say that again?
+facts: only new lasting "label: value" details, else [].`;
 
 function cleanReplies(parsed) {
   if (!Array.isArray(parsed)) return null;
@@ -76,40 +64,38 @@ function extractPayload(text) {
     try {
       const parsed = JSON.parse(text.slice(objStart, objEnd + 1));
       const replies = cleanReplies(parsed?.replies);
-      if (replies) {
+      const category = normalizeCategory(parsed.category);
+      if (replies && category) {
         const facts = (Array.isArray(parsed.facts) ? parsed.facts : [])
           .map((line) => String(line).trim().slice(0, 160))
           .filter(Boolean)
           .slice(0, 8);
-        return { replies, category: normalizeCategory(parsed.category), facts };
+        return { replies, category, facts };
       }
     } catch {
-      /* fall through to array format */
+      return null;
     }
   }
 
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    const replies = cleanReplies(JSON.parse(text.slice(start, end + 1)));
-    if (!replies) return null;
-    return { replies, category: "", facts: [] };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-async function chatComplete({ url, apiKey, model, messages, extra = {} }) {
+function providerName(url) {
+  return String(url || "").includes("x.ai") ? "grok" : "openai";
+}
+
+async function chatComplete({ url, apiKey, model, messages, extra = {}, signal, json = true }) {
   const body = {
     model,
     messages,
     temperature: 0.8,
-    max_tokens: 280,
+    max_tokens: 1000,
     ...extra,
   };
+  if (json) body.response_format = { type: "json_object" };
   const res = await fetch(url, {
     method: "POST",
+    signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -122,6 +108,58 @@ async function chatComplete({ url, apiKey, model, messages, extra = {} }) {
     throw new Error(`${res.status} ${msg}`);
   }
   return data?.choices?.[0]?.message?.content || "";
+}
+
+async function suggestFromProvider(provider, messages, signal) {
+  try {
+    return await chatComplete({ ...provider, messages, signal });
+  } catch (firstErr) {
+    if (signal?.aborted) throw firstErr;
+    return chatComplete({
+      ...provider,
+      messages,
+      extra: { max_tokens: 1000 },
+      json: false,
+      signal,
+    });
+  }
+}
+
+function raceValid(jobs) {
+  return new Promise((resolve, reject) => {
+    const errors = [];
+    let pending = jobs.length;
+    let settled = false;
+    if (!pending) {
+      reject(new Error("No API keys configured in .env"));
+      return;
+    }
+    for (const job of jobs) {
+      job
+        .then((value) => {
+          if (settled) return;
+          if (value) {
+            settled = true;
+            resolve(value);
+            return;
+          }
+          errors.push("invalid JSON");
+          pending -= 1;
+          if (!pending) reject(new Error(errors.join(" | ")));
+        })
+        .catch((err) => {
+          if (settled) return;
+          if (err?.name === "AbortError") {
+            pending -= 1;
+            if (!pending) reject(new Error(errors.join(" | ") || "aborted"));
+            return;
+          }
+          errors.push(String(err.message || err));
+          pending -= 1;
+          if (!pending) reject(new Error(errors.join(" | ")));
+        });
+    }
+  });
 }
 
 app.get("/api/health", (_req, res) => {
@@ -146,53 +184,29 @@ app.post("/api/suggest", async (req, res) => {
   if (!heard.trim() && !avoid.length) {
     return res.status(400).json({ error: "heard required" });
   }
-  const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
+  const history = Array.isArray(req.body?.history) ? req.body.history.slice(-6) : [];
   const facts = (Array.isArray(req.body?.facts) ? req.body.facts : [])
     .map((line) => String(line || "").trim().slice(0, 160))
     .filter(Boolean)
-    .slice(0, 40);
+    .slice(-20);
   const summaries = (Array.isArray(req.body?.summaries) ? req.body.summaries : [])
     .map((item) => (typeof item === "string" ? item : item?.text) || "")
     .map((line) => String(line).trim().slice(0, 220))
     .filter(Boolean)
-    .slice(-8);
-  const alternatives = (Array.isArray(req.body?.alternatives) ? req.body.alternatives : [])
-    .map((item) => ({
-      text: String(item?.text || item || "").trim().slice(0, 200),
-      confidence: Number(item?.confidence),
-    }))
-    .filter((item) => item.text)
-    .slice(0, 5);
+    .slice(-3);
   const lowConfidence = Boolean(req.body?.lowConfidence);
-  const preferred = String(req.body?.provider || "grok");
+  const preferred = String(req.body?.provider || "race");
   const customPrompt = String(req.body?.customPrompt || "").slice(0, 2000);
 
-  const altLines = alternatives
-    .map((item) => {
-      const pct = Number.isFinite(item.confidence) ? ` (${Math.round(item.confidence * 100)}%)` : "";
-      return `- "${item.text}"${pct}`;
-    })
-    .join("\n");
-
   const userContent = [
-    profile ? `User profile:\n${profile}` : "User profile: not provided.",
-    customPrompt ? `Custom instructions from the caregiver:\n${customPrompt}` : "",
-    facts.length ? `Remembered facts about the user:\n${facts.map((line) => `- ${line}`).join("\n")}` : "",
-    summaries.length ? `Recent conversation summaries:\n${summaries.map((line) => `- ${line}`).join("\n")}` : "",
-    history.length ? `Recent conversation:\n${history.join("\n")}` : "No earlier conversation.",
-    heard.trim()
-      ? `The other person just said (top speech-recognition guess):\n"${heard}"`
-      : "Nobody has said anything yet. Offer general conversation openers.",
-    altLines
-      ? `Other speech-recognition alternatives (the transcript may be wrong; pick the meaning that fits history and memory):\n${altLines}`
-      : "",
-    lowConfidence
-      ? "Speech-recognition confidence is low. One of the 4 replies MUST be exactly: Can you say that again?"
-      : "",
-    avoid.length
-      ? `The user rejected these replies. Do NOT repeat or reword any of them; give 4 clearly different options:\n${avoid.map((line) => `- ${line}`).join("\n")}`
-      : "",
-    "Classify the moment into one category, then write the 4 replies now.",
+    profile.trim() ? `Profile:\n${profile}` : "",
+    customPrompt.trim() ? `Caregiver notes:\n${customPrompt}` : "",
+    facts.length ? `Facts:\n${facts.map((line) => `- ${line}`).join("\n")}` : "",
+    summaries.length ? `Earlier:\n${summaries.map((line) => `- ${line}`).join("\n")}` : "",
+    history.length ? `Just now:\n${history.join("\n")}` : "",
+    heard.trim() ? `They said:\n"${heard}"` : "They have not spoken yet. Offer openers.",
+    lowConfidence ? "Low confidence. One reply must be: Can you say that again?" : "",
+    avoid.length ? `Do not repeat:\n${avoid.map((line) => `- ${line}`).join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -215,48 +229,57 @@ app.post("/api/suggest", async (req, res) => {
     extra: {},
   };
 
-  const order = preferred === "openai" ? [openai, grok] : [grok, openai];
-  const errors = [];
+  const keyed = [grok, openai].filter((p) => p.apiKey);
+  const sequential = preferred === "openai" ? [openai, grok].filter((p) => p.apiKey) : [grok, openai].filter((p) => p.apiKey);
+  const race = preferred === "race" || preferred === "both";
 
-  for (const provider of order) {
-    if (!provider.apiKey) continue;
-    try {
-      let content;
-      try {
-        content = await chatComplete({ ...provider, messages });
-      } catch (firstErr) {
-        if (provider.extra?.reasoning_effort) {
-          content = await chatComplete({
-            ...provider,
-            extra: {},
-            messages,
-          });
-        } else {
-          throw firstErr;
+  try {
+    let chosen;
+    if (race && keyed.length > 1) {
+      const controllers = keyed.map(() => new AbortController());
+      chosen = await raceValid(
+        keyed.map((provider, i) =>
+          suggestFromProvider(provider, messages, controllers[i].signal).then((content) => {
+            const payload = extractPayload(content);
+            if (!payload) return null;
+            controllers.forEach((c, j) => { if (j !== i) c.abort(); });
+            return { payload, source: providerName(provider.url), model: provider.model };
+          })
+        )
+      );
+    } else {
+      const errors = [];
+      for (const provider of sequential) {
+        try {
+          const content = await suggestFromProvider(provider, messages);
+          const payload = extractPayload(content);
+          if (payload) {
+            chosen = { payload, source: providerName(provider.url), model: provider.model };
+            break;
+          }
+          errors.push(`${providerName(provider.url)}: invalid JSON`);
+        } catch (err) {
+          errors.push(`${providerName(provider.url)}: ${err.message || err}`);
         }
       }
-      const payload = extractPayload(content);
-      if (payload) {
-        console.log(`suggest ok via ${provider.url.includes("x.ai") ? "grok" : "openai"}`);
-        return res.json({
-          replies: payload.replies,
-          category: payload.category,
-          facts: payload.facts || [],
-          source: provider.url.includes("x.ai") ? "grok" : "openai",
-          model: provider.model,
-        });
-      }
-      errors.push("model did not return 4 JSON strings");
-    } catch (err) {
-      errors.push(String(err.message || err));
+      if (!chosen) throw new Error(errors.join(" | ") || "No API keys configured in .env");
     }
-  }
 
-  console.error("suggest failed:", errors.join(" | ") || "No API keys configured in .env");
-  res.status(502).json({
-    error: "AI suggest failed",
-    detail: errors.join(" | ") || "No API keys configured in .env",
-  });
+    console.log(`suggest ok via ${chosen.source}${race && keyed.length > 1 ? " (race)" : ""}`);
+    return res.json({
+      replies: chosen.payload.replies,
+      category: chosen.payload.category,
+      facts: chosen.payload.facts || [],
+      source: chosen.source,
+      model: chosen.model,
+    });
+  } catch (err) {
+    console.error("suggest failed:", err.message || err);
+    res.status(502).json({
+      error: "AI suggest failed",
+      detail: String(err.message || err),
+    });
+  }
 });
 
 const SUMMARIZE_PROMPT = `You write a one-sentence summary of an AAC conversation and any new lasting facts about the nonverbal user.
@@ -349,9 +372,18 @@ app.post("/api/speak", async (req, res) => {
     return res.status(501).json({ error: "Grok Voice not configured" });
   }
 
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 25000);
+  req.on("close", () => controller.abort());
+
   try {
     const upstream = await fetch(XAI_TTS_URL, {
       method: "POST",
+      signal: controller.signal,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
@@ -373,7 +405,18 @@ app.post("/api/speak", async (req, res) => {
     res.setHeader("Content-Type", upstream.headers.get("content-type") || "audio/mpeg");
     res.send(buf);
   } catch (err) {
+    if (req.destroyed) return;
+    if (err?.name === "AbortError") {
+      if (!res.headersSent) {
+        res.status(timedOut ? 504 : 499).json({
+          error: timedOut ? "Grok TTS timed out" : "Grok TTS cancelled",
+        });
+      }
+      return;
+    }
     res.status(502).json({ error: "Grok TTS failed", detail: String(err.message || err) });
+  } finally {
+    clearTimeout(timer);
   }
 });
 

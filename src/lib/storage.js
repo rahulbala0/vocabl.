@@ -3,7 +3,7 @@ const KEY = "speakeasy-settings-v1";
 export const DEFAULT_SETTINGS = {
   profile:
     "My name is Alex. I like music, basketball, and strong coffee. I live with my sister Maya and my dog Bean. I get tired in the afternoon.",
-  provider: "grok",
+  provider: "race",
   voice: "grok",
   scanning: false,
   scanMs: 1100,
@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS = {
     "Keep replies warm and direct. Prefer everyday words. If they offer a choice, answer the choice.",
   facts: [],
   summaries: [],
+  replyPanePx: 320,
 };
 
 export function loadSettings() {
