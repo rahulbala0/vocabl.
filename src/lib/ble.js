@@ -12,8 +12,14 @@ export async function connectSpeakEasy(onCommand) {
   if (!bluetoothSupported()) {
     throw new Error("Web Bluetooth needs Chrome (not iOS).");
   }
+  // OR filters: ESP32 often omits the Complete Local Name when a 128-bit
+  // service UUID fills the adv packet, so name-only matching fails in Chrome.
   const device = await navigator.bluetooth.requestDevice({
-    filters: [{ name: "SpeakEasy" }],
+    filters: [
+      { name: "SpeakEasy" },
+      { namePrefix: "Speak" },
+      { services: [SERVICE] },
+    ],
     optionalServices: [SERVICE],
   });
   const server = await device.gatt.connect();
