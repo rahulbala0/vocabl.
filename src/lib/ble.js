@@ -1,3 +1,5 @@
+import { createJoystickCommandParser } from "./joystick";
+
 const SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const CHAR_WRITE = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 const CHAR_NOTIFY = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -20,9 +22,10 @@ export async function connectSpeakEasy(onCommand) {
   const write = await service.getCharacteristic(CHAR_WRITE);
 
   const decoder = new TextDecoder("utf-8");
+  const parse = createJoystickCommandParser(onCommand);
   const handler = (event) => {
-    const text = decoder.decode(event.target.value).trim().toUpperCase();
-    if (text) onCommand(text);
+    const text = decoder.decode(event.target.value);
+    if (text) parse(text);
   };
   await notify.startNotifications();
   notify.addEventListener("characteristicvaluechanged", handler);

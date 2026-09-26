@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bluetoothSupported, connectSpeakEasy } from "./lib/ble";
 import { fetchSuggestions } from "./lib/ai";
-import { buildTiles, CATEGORIES, moveIndex } from "./lib/board";
+import { buildTiles, CATEGORIES } from "./lib/board";
+import { quadrantToIndex } from "./lib/joystick";
 import { browserSpeak, createListener, grokSpeak, speechRecognitionSupported } from "./lib/speech";
 import { loadSettings, saveSettings } from "./lib/storage";
 import Wheel from "./Wheel.jsx";
@@ -186,18 +187,26 @@ export default function App() {
     }
   }, [speakText]);
 
-  const onCommand = useCallback((cmd) => {
-    if (cmd === "DISCONNECTED") {
-      setBleState("off");
-      setStatus("Joystick disconnected");
-      bleRef.current = null;
-      return;
-    }
-    if (showSettings) return;
-    if (cmd === "SELECT") { activate(selectedRef.current); return; }
-    if (settingsRef.current.scanning) return;
-    setSelected((i) => moveIndex(i, cmd, tilesRef.current.length));
-  }, [activate, showSettings]);
+  const onCommand = useCallback(
+    (cmd) => {
+      if (cmd === "DISCONNECTED") {
+        setBleState("off");
+        setStatus("Joystick disconnected");
+        bleRef.current = null;
+        return;
+      }
+      if (showSettings) return;
+      if (cmd === "SELECT") {
+        activate(selectedRef.current);
+        return;
+      }
+      if (settingsRef.current.scanning) return;
+      const index = quadrantToIndex(cmd, tilesRef.current.length);
+      if (index == null) return;
+      setSelected(index);
+    },
+    [activate, showSettings]
+  );
   commandRef.current = onCommand;
 
   // Keyboard: arrows + long-press back + Y/N/L shortcuts
