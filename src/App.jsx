@@ -85,8 +85,11 @@ export default function App() {
     setView("board");
     setRepliesVersion((v) => v + 1);
     setBusy(false);
-    const where = result.source === "offline" ? "Offline" : `From ${result.source}`;
-    setStatus(`${where} · ${result.category || "Chat"}`);
+    if (result.source === "offline") {
+      setStatus(result.error ? `AI failed, using offline · ${result.error}` : "Offline replies");
+    } else {
+      setStatus(`From ${result.source} · ${result.category || "Chat"}`);
+    }
   }, []);
 
   const onHeard = useCallback((text) => {
@@ -105,19 +108,35 @@ export default function App() {
     });
     listenerRef.current = listener;
 
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((h) => {
-        if (!h.grok && !h.openai) setStatus("No API keys — offline replies only.");
-      })
-      .catch(() => setStatus("Proxy not running. Start with npm run dev."));
-
     if (speechRecognitionSupported()) {
       listener.start();
       setListening(true);
       setStatus("Listening…");
     }
+
+    return () => listener.stop();
   }, [onHeard]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetch("/api/health")
+        .then((r) => r.json())
+        .then((h) => {
+          if (cancelled) return;
+          if (!h.grok && !h.openai) setStatus("No API keys — offline replies only.");
+        })
+        .catch(() => {
+          if (!cancelled) setStatus("Proxy not running. Start with npm run dev.");
+        });
+    };
+    check();
+    const id = setInterval(check, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     if (!settings.scanning || showSettings) return undefined;

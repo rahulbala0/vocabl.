@@ -1,6 +1,23 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const envPath = path.join(rootDir, ".env");
+
+function loadEnv() {
+  dotenv.config({ path: envPath, override: true });
+}
+
+function envKey(name) {
+  return String(process.env[name] || "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+}
+
+loadEnv();
 
 const app = express();
 app.use(cors());
@@ -101,18 +118,23 @@ async function chatComplete({ url, apiKey, model, messages, extra = {} }) {
 }
 
 app.get("/api/health", (_req, res) => {
+  loadEnv();
   res.json({
     ok: true,
-    grok: Boolean(process.env.XAI_API_KEY),
-    openai: Boolean(process.env.OPENAI_API_KEY),
-    grokModel: process.env.XAI_MODEL || "grok-4.6",
-    openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    grok: Boolean(envKey("XAI_API_KEY")),
+    openai: Boolean(envKey("OPENAI_API_KEY")),
+    grokModel: envKey("XAI_MODEL") || "grok-4.6",
+    openaiModel: envKey("OPENAI_MODEL") || "gpt-4o-mini",
   });
 });
 
 app.post("/api/suggest", async (req, res) => {
+  loadEnv();
   const profile = String(req.body?.profile || "").slice(0, 1500);
   const heard = String(req.body?.heard || "").slice(0, 500);
+  if (!heard.trim()) {
+    return res.status(400).json({ error: "heard required" });
+  }
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
   const preferred = String(req.body?.provider || "grok");
   const customPrompt = String(req.body?.customPrompt || "").slice(0, 2000);
@@ -134,14 +156,14 @@ app.post("/api/suggest", async (req, res) => {
 
   const grok = {
     url: XAI_URL,
-    apiKey: process.env.XAI_API_KEY,
-    model: process.env.XAI_MODEL || "grok-4.6",
+    apiKey: envKey("XAI_API_KEY"),
+    model: envKey("XAI_MODEL") || "grok-4.6",
     extra: { reasoning_effort: "low" },
   };
   const openai = {
     url: OPENAI_URL,
-    apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    apiKey: envKey("OPENAI_API_KEY"),
+    model: envKey("OPENAI_MODEL") || "gpt-4o-mini",
     extra: {},
   };
 
@@ -167,6 +189,7 @@ app.post("/api/suggest", async (req, res) => {
       }
       const payload = extractPayload(content);
       if (payload) {
+        console.log(`suggest ok via ${provider.url.includes("x.ai") ? "grok" : "openai"}`);
         return res.json({
           replies: payload.replies,
           category: payload.category,
@@ -180,6 +203,7 @@ app.post("/api/suggest", async (req, res) => {
     }
   }
 
+  console.error("suggest failed:", errors.join(" | ") || "No API keys configured in .env");
   res.status(502).json({
     error: "AI suggest failed",
     detail: errors.join(" | ") || "No API keys configured in .env",
@@ -187,9 +211,11 @@ app.post("/api/suggest", async (req, res) => {
 });
 
 app.post("/api/speak", async (req, res) => {
+  loadEnv();
   const text = String(req.body?.text || "").slice(0, 400);
   if (!text) return res.status(400).json({ error: "text required" });
-  if (!process.env.XAI_API_KEY) {
+  const apiKey = envKey("XAI_API_KEY");
+  if (!apiKey) {
     return res.status(501).json({ error: "Grok Voice not configured" });
   }
 
@@ -197,12 +223,12 @@ app.post("/api/speak", async (req, res) => {
     const upstream = await fetch(XAI_TTS_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.XAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         text,
-        voice_id: process.env.XAI_TTS_VOICE || "eve",
+        voice_id: envKey("XAI_TTS_VOICE") || "eve",
         language: "en",
       }),
     });
@@ -223,7 +249,12 @@ app.post("/api/speak", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`SpeakEasy proxy on http://127.0.0.1:${PORT}`);
-  if (!process.env.XAI_API_KEY && !process.env.OPENAI_API_KEY) {
+  console.log(`Reading env from ${envPath}`);
+  if (!envKey("XAI_API_KEY") && !envKey("OPENAI_API_KEY")) {
     console.warn("No API keys in .env — the board will use offline replies.");
+  } else {
+    console.log(
+      `Keys loaded: grok=${Boolean(envKey("XAI_API_KEY"))} openai=${Boolean(envKey("OPENAI_API_KEY"))}`
+    );
   }
 });

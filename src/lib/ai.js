@@ -7,8 +7,10 @@ export async function fetchSuggestions({ profile, heard, history, provider, cust
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ profile, heard, history, provider, customPrompt }),
     });
-    if (!res.ok) throw new Error("suggest failed");
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.detail || data.error || `suggest failed (${res.status})`);
+    }
     if (Array.isArray(data.replies) && data.replies.length >= 4) {
       return {
         replies: data.replies.slice(0, 4),
@@ -17,7 +19,8 @@ export async function fetchSuggestions({ profile, heard, history, provider, cust
       };
     }
     throw new Error("bad payload");
-  } catch {
-    return offlineSuggest(heard);
+  } catch (err) {
+    console.error("AI suggest failed", err);
+    return { ...offlineSuggest(heard), error: String(err.message || err) };
   }
 }
