@@ -1,0 +1,191 @@
+.app {
+  min-height: 100%;
+  padding: 16px 20px 28px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2.1rem;
+  letter-spacing: 0.02em;
+}
+
+.tag {
+  margin: 4px 0 0;
+  color: #c8c2b4;
+  font-size: 1.05rem;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 3px solid #f4f1ea;
+  background: #152238;
+  color: #f4f1ea;
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 8px;
+}
+
+.pill {
+  background: #203250;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.9rem;
+}
+
+.pill.live {
+  background: #125c3a;
+  outline: 2px solid #3dff9a;
+}
+
+.heard,
+.status {
+  margin: 4px 0;
+  font-size: 1.15rem;
+}
+
+.status {
+  color: #ffe38a;
+  min-height: 1.4em;
+}
+
+.row {
+  margin-top: 14px;
+}
+
+.row h2 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #b7c4da;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tile {
+  min-height: 92px;
+  font-size: 1.35rem;
+  line-height: 1.2;
+  text-align: center;
+  background: #1b2d4d;
+  border-color: #4d6388;
+}
+
+.tile.control {
+  background: #243044;
+}
+
+.tile.empty {
+  opacity: 0.45;
+}
+
+.tile.category {
+  min-height: 140px;
+  font-size: 1.8rem;
+}
+
+.tile.on {
+  background: #0f1a2e;
+  border-color: #ffe500;
+  box-shadow: 0 0 0 6px #ffe500;
+  color: #fffce8;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 16, 0.78);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.panel {
+  width: min(640px, 100%);
+  background: #101a2c;
+  border: 3px solid #ffe500;
+  border-radius: 16px;
+  padding: 20px;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.panel label,
+.panel fieldset {
+  display: block;
+  margin: 12px 0;
+  font-weight: 700;
+}
+
+.panel input,
+.panel textarea,
+.panel select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font: inherit;
+  padding: 8px;
+  border-radius: 8px;
+  border: 2px solid #4d6388;
+  background: #0b1220;
+  color: #f4f1ea;
+}
+
+.panel .check {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.panel .check input {
+  width: auto;
+}
+
+.hint {
+  color: #c8c2b4;
+  font-weight: 400;
+}
+
+@media (max-width: 800px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tile {
+    min-height: 72px;
+    font-size: 1.1rem;
+  }
+}

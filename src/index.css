@@ -1,0 +1,20 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
+  background: #0b1220;
+  color: #f4f1ea;
+}
