@@ -1,5 +1,5 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -15,6 +15,6 @@ body,
 
 body {
   font-family: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
-  background: #0b1220;
-  color: #f4f1ea;
+  background: #ffffff;
+  color: #171717;
 }
