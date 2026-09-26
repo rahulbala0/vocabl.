@@ -11,32 +11,65 @@ const XAI_URL = "https://api.x.ai/v1/chat/completions";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const XAI_TTS_URL = "https://api.x.ai/v1/tts";
 
+const CATEGORIES = ["Food", "Feelings", "People", "Help", "Chat"];
+
 const SYSTEM_PROMPT = `You generate replies for a nonverbal person using an AAC communication board.
-Return ONLY a JSON array of exactly 4 strings. No markdown, no labels.
-Each string is a short first-person spoken reply, under 12 words.
-The 4 replies MUST cover different intents, not rewordings:
+Return ONLY JSON, no markdown, no labels:
+{"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","..."]}
+Pick category from what the other person just said:
+- Food: eating, drinking, meals, hunger, thirst
+- Feelings: mood, pain, energy, how they are
+- People: family, friends, staff, who is present
+- Help: bathroom, emergency, position, discomfort, stop
+- Chat: anything else, small talk, choices, general talk
+Each reply is a short first-person spoken line, under 10 words.
+The 3 replies MUST cover different intents, not rewordings:
 1) agree / accept
 2) decline / not that
-3) ask a question back
-4) something specific from the profile or what was just said
+3) ask a question back or something specific from the profile
 Sound like a real person, not a robot.`;
 
-function extractReplies(text) {
+function cleanReplies(parsed) {
+  if (!Array.isArray(parsed)) return null;
+  const cleaned = parsed
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  if (cleaned.length < 3) return null;
+  return cleaned.map((line) =>
+    line.split(/\s+/).length > 14 ? line.split(/\s+/).slice(0, 12).join(" ") : line
+  );
+}
+
+function normalizeCategory(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return CATEGORIES.find((name) => name.toLowerCase() === raw) || "";
+}
+
+function extractPayload(text) {
   if (!text) return null;
+
+  const objStart = text.indexOf("{");
+  const objEnd = text.lastIndexOf("}");
+  if (objStart !== -1 && objEnd > objStart) {
+    try {
+      const parsed = JSON.parse(text.slice(objStart, objEnd + 1));
+      const replies = cleanReplies(parsed?.replies);
+      if (replies) {
+        return { replies, category: normalizeCategory(parsed.category) };
+      }
+    } catch {
+      /* fall through to array format */
+    }
+  }
+
   const start = text.indexOf("[");
   const end = text.lastIndexOf("]");
   if (start === -1 || end === -1 || end <= start) return null;
   try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    if (!Array.isArray(parsed)) return null;
-    const cleaned = parsed
-      .map((item) => String(item).trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    if (cleaned.length < 4) return null;
-    return cleaned.map((line) =>
-      line.split(/\s+/).length > 14 ? line.split(/\s+/).slice(0, 12).join(" ") : line
-    );
+    const replies = cleanReplies(JSON.parse(text.slice(start, end + 1)));
+    if (!replies) return null;
+    return { replies, category: "" };
   } catch {
     return null;
   }
@@ -47,7 +80,7 @@ async function chatComplete({ url, apiKey, model, messages, extra = {} }) {
     model,
     messages,
     temperature: 0.8,
-    max_tokens: 220,
+    max_tokens: 280,
     ...extra,
   };
   const res = await fetch(url, {
@@ -81,13 +114,17 @@ app.post("/api/suggest", async (req, res) => {
   const heard = String(req.body?.heard || "").slice(0, 500);
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
   const preferred = String(req.body?.provider || "grok");
+  const customPrompt = String(req.body?.customPrompt || "").slice(0, 2000);
 
   const userContent = [
     profile ? `User profile:\n${profile}` : "User profile: not provided.",
+    customPrompt ? `Custom instructions from the caregiver:\n${customPrompt}` : "",
     history.length ? `Recent conversation:\n${history.join("\n")}` : "No earlier conversation.",
     `The other person just said:\n"${heard}"`,
-    "Write the 4 replies now.",
-  ].join("\n\n");
+    "Classify the moment into one category, then write the 4 replies now.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -127,10 +164,11 @@ app.post("/api/suggest", async (req, res) => {
           throw firstErr;
         }
       }
-      const replies = extractReplies(content);
-      if (replies) {
+      const payload = extractPayload(content);
+      if (payload) {
         return res.json({
-          replies,
+          replies: payload.replies,
+          category: payload.category,
           source: provider.url.includes("x.ai") ? "grok" : "openai",
           model: provider.model,
         });

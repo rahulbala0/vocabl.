@@ -4,9 +4,10 @@ import { fetchSuggestions } from "./lib/ai";
 import { buildTiles, CATEGORIES, moveIndex } from "./lib/board";
 import { browserSpeak, createListener, grokSpeak, speechRecognitionSupported } from "./lib/speech";
 import { loadSettings, saveSettings } from "./lib/storage";
+import Wheel from "./Wheel.jsx";
 import "./App.css";
 
-const STARTER = ["I'm listening.", "Give me a second.", "Can you repeat that?", "Tell me more."];
+const STARTER = ["I'm listening.", "Give me a second.", "Tell me more."];
 
 export default function App() {
   const [settings, setSettings] = useState(loadSettings);
@@ -21,32 +22,30 @@ export default function App() {
   const [lastSpoken, setLastSpoken] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [bleState, setBleState] = useState("off");
-  const [status, setStatus] = useState("Keyboard: arrows + Enter. Chrome required.");
+  const [status, setStatus] = useState("Turn the wheel with arrows. Enter speaks.");
   const [busy, setBusy] = useState(false);
+  const [category, setCategory] = useState("Chat");
+  const [typedHeard, setTypedHeard] = useState("");
 
   const historyRef = useRef([]);
   const listenerRef = useRef(null);
   const bleRef = useRef(null);
   const settingsRef = useRef(settings);
   const selectedRef = useRef(0);
-  const viewRef = useRef(view);
   const tilesRef = useRef([]);
   const handlingRef = useRef(false);
   const commandRef = useRef(null);
 
   settingsRef.current = settings;
   selectedRef.current = selected;
-  viewRef.current = view;
 
   const tiles = useMemo(
     () =>
       buildTiles({
         suggestions,
-        custom: settings.custom,
-        listening,
         view,
       }),
-    [suggestions, settings.custom, listening, view]
+    [suggestions, view]
   );
   tilesRef.current = tiles;
 
@@ -87,13 +86,16 @@ export default function App() {
       heard: text,
       history: historyRef.current,
       provider: settingsRef.current.provider,
+      customPrompt: settingsRef.current.customPrompt,
     });
     setSuggestions(result.replies);
+    setCategory(result.category || "Chat");
     setAiSource(result.source);
     setSelected(0);
     setView("board");
     setBusy(false);
-    setStatus(result.source === "offline" ? "Offline replies (no key or API error)" : `Replies from ${result.source}`);
+    const where = result.source === "offline" ? "Offline replies" : `Replies from ${result.source}`;
+    setStatus(`${where} · ${result.category || "Chat"}`);
   }, []);
 
   const onHeard = useCallback(
@@ -128,14 +130,31 @@ export default function App() {
     return () => clearInterval(id);
   }, [settings.scanning, settings.scanMs, showSettings, tiles.length]);
 
+  const toggleListen = useCallback(() => {
+    if (!speechRecognitionSupported()) {
+      setStatus("Speech recognition needs Chrome + internet.");
+      return;
+    }
+    if (listening) {
+      listenerRef.current?.stop();
+      setListening(false);
+      setStatus("Mic off");
+    } else {
+      listenerRef.current?.start();
+      setListening(true);
+      setStatus("Listening…");
+    }
+  }, [listening]);
+
   const activate = useCallback(
     async (index) => {
       const tile = tilesRef.current[index];
-      if (!tile || tile.kind === "empty" || handlingRef.current) return;
+      if (!tile || handlingRef.current) return;
       handlingRef.current = true;
       try {
         if (tile.kind === "category") {
           setSuggestions(CATEGORIES[tile.label]);
+          setCategory(tile.label);
           setView("board");
           setSelected(0);
           setAiSource("category");
@@ -145,43 +164,12 @@ export default function App() {
         if (tile.kind === "speak") {
           historyRef.current = [...historyRef.current, `Me: ${tile.label}`].slice(-8);
           await speakText(tile.label);
-          return;
-        }
-        if (tile.id === "listen") {
-          if (!speechRecognitionSupported()) {
-            setStatus("Speech recognition needs Chrome + internet.");
-            return;
-          }
-          if (listening) {
-            listenerRef.current?.stop();
-            setListening(false);
-            setStatus("Mic off");
-          } else {
-            listenerRef.current?.start();
-            setListening(true);
-            setStatus("Listening…");
-          }
-          return;
-        }
-        if (tile.id === "refresh") {
-          if (heard) await requestReplies(heard);
-          else setStatus("Nothing heard yet. Turn on Listen first.");
-          return;
-        }
-        if (tile.id === "repeat") {
-          if (lastSpoken) await speakText(lastSpoken);
-          else setStatus("Nothing to repeat yet.");
-          return;
-        }
-        if (tile.id === "thanks") {
-          historyRef.current = [...historyRef.current, "Me: Thank you."].slice(-8);
-          await speakText("Thank you.");
         }
       } finally {
         handlingRef.current = false;
       }
     },
-    [heard, lastSpoken, listening, requestReplies, speakText]
+    [speakText]
   );
 
   const onCommand = useCallback(
@@ -211,6 +199,7 @@ export default function App() {
         return;
       }
       if (showSettings) return;
+      if (event.target.closest?.("input, textarea, select")) return;
       const map = {
         ArrowUp: "UP",
         ArrowDown: "DOWN",
@@ -240,25 +229,31 @@ export default function App() {
     }
   }
 
-  const rows = view === "categories" ? [tiles] : [0, 1, 2, 3].map((r) => tiles.filter((t) => t.row === r));
-  const rowTitles =
-    view === "categories"
-      ? ["Start a conversation"]
-      : ["AI replies", "Quick words", "Controls", "Custom phrases"];
+  const hubLabel = view === "categories" ? "Open" : speaking ? "…" : "Speak";
 
   return (
     <div className="app">
       <header className="top">
         <div>
-          <h1>SpeakEasy Board</h1>
-          <p className="tag">Hear them. Pick a reply. Speak in seconds.</p>
+          <h1>SpeakEasy</h1>
+          <p className="tag">{view === "categories" ? "Pick a topic" : `${category} · ${aiSource}`}</p>
         </div>
         <div className="actions">
+          <button type="button" className={listening ? "live" : ""} onClick={toggleListen}>
+            {listening ? "Listening" : "Listen"}
+          </button>
           <button type="button" onClick={() => setView(view === "categories" ? "board" : "categories")}>
-            {view === "categories" ? "Back to board" : "Categories"}
+            {view === "categories" ? "Replies" : "Topics"}
+          </button>
+          <button
+            type="button"
+            onClick={() => (heard ? requestReplies(heard) : setStatus("Nothing heard yet."))}
+            disabled={busy}
+          >
+            New
           </button>
           <button type="button" onClick={connectBle} disabled={!bluetoothSupported() || bleState === "connecting"}>
-            {bleState === "on" ? "Joystick on" : "Connect joystick"}
+            {bleState === "on" ? "Joystick on" : "Joystick"}
           </button>
           <button type="button" onClick={() => setShowSettings(true)}>
             Settings
@@ -267,51 +262,58 @@ export default function App() {
       </header>
 
       <div className="meta">
-        <span className={`pill ${listening ? "live" : ""}`}>{listening ? "MIC ON" : "MIC OFF"}</span>
-        <span className={`pill ${bleState === "on" ? "live" : ""}`}>BLE {bleState}</span>
-        <span className="pill">{aiSource}</span>
-        {settings.scanning ? <span className="pill live">SCANNING</span> : null}
-        {speaking ? <span className="pill live">SPEAKING</span> : null}
-        {busy ? <span className="pill">AI…</span> : null}
+        <span className={`pill ${listening ? "live" : ""}`}>{listening ? "Mic on" : "Mic off"}</span>
+        {speaking ? <span className="pill live">Speaking</span> : null}
+        {busy ? <span className="pill">Thinking</span> : null}
+        {settings.scanning ? <span className="pill live">Scanning</span> : null}
       </div>
 
       <p className="heard">
         <strong>Heard:</strong> {interim || heard || "—"}
       </p>
+
+      <div className="stage">
+        <Wheel
+          items={tiles}
+          selected={selected}
+          onChoose={(index) => {
+            setSelected(index);
+            activate(index);
+          }}
+          hubLabel={hubLabel}
+          onHub={() => activate(selected)}
+        />
+      </div>
+
       <p className="status">{status}</p>
 
-      {rows.map((row, r) => (
-        <section key={rowTitles[r]} className="row">
-          <h2>{rowTitles[r]}</h2>
-          <div className="grid">
-            {row.map((tile) => {
-              const index = tiles.findIndex((t) => t.id === tile.id);
-              const on = index === selected;
-              return (
-                <button
-                  key={tile.id}
-                  type="button"
-                  className={`tile ${on ? "on" : ""} ${tile.kind}`}
-                  onClick={() => {
-                    setSelected(index);
-                    activate(index);
-                  }}
-                >
-                  {tile.label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+      <form
+        className="heard-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const text = typedHeard.trim();
+          if (!text) return;
+          setTypedHeard("");
+          onHeard(text);
+        }}
+      >
+        <input
+          value={typedHeard}
+          onChange={(e) => setTypedHeard(e.target.value)}
+          placeholder="Type what they said"
+          aria-label="Type what they said"
+        />
+        <button type="submit" className="primary" disabled={busy || !typedHeard.trim()}>
+          Reply
+        </button>
+      </form>
 
       {showSettings ? (
         <div className="overlay" role="dialog" aria-label="Settings">
           <div className="panel">
             <h2>Settings</h2>
             <p className="hint">
-              API keys live in the project <code>.env</code> file on the laptop, not in the browser. That avoids CORS
-              and keeps keys off the tablet screen.
+              API keys live in the project <code>.env</code> file on the laptop, not in the browser.
             </p>
             <label>
               User profile
@@ -319,6 +321,15 @@ export default function App() {
                 rows={5}
                 value={settings.profile}
                 onChange={(e) => persist({ ...settings, profile: e.target.value })}
+              />
+            </label>
+            <label>
+              Custom prompt
+              <textarea
+                rows={4}
+                value={settings.customPrompt}
+                onChange={(e) => persist({ ...settings, customPrompt: e.target.value })}
+                placeholder="How the AI should write replies for this person"
               />
             </label>
             <label>
@@ -344,7 +355,7 @@ export default function App() {
                 checked={settings.scanning}
                 onChange={(e) => persist({ ...settings, scanning: e.target.checked })}
               />
-              Scanning mode (auto-highlight; click or Enter selects)
+              Scanning mode (highlight walks around the wheel)
             </label>
             <label>
               Scan speed (ms)
@@ -356,24 +367,15 @@ export default function App() {
                 onChange={(e) => persist({ ...settings, scanMs: Number(e.target.value) })}
               />
             </label>
-            <fieldset>
-              <legend>Custom phrases (row 4)</legend>
-              {settings.custom.map((phrase, i) => (
-                <input
-                  key={i}
-                  value={phrase}
-                  onChange={(e) => {
-                    const custom = settings.custom.slice();
-                    custom[i] = e.target.value;
-                    persist({ ...settings, custom });
-                  }}
-                />
-              ))}
-            </fieldset>
             <div className="actions">
-              <button type="button" onClick={() => setShowSettings(false)}>
+              <button type="button" className="primary" onClick={() => setShowSettings(false)}>
                 Close
               </button>
+              {lastSpoken ? (
+                <button type="button" onClick={() => speakText(lastSpoken)}>
+                  Repeat last
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
