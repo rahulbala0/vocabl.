@@ -9,9 +9,9 @@ export async function fetchSuggestions({ profile, heard, history, provider, cust
     });
     if (!res.ok) throw new Error("suggest failed");
     const data = await res.json();
-    if (Array.isArray(data.replies) && data.replies.length >= 3) {
+    if (Array.isArray(data.replies) && data.replies.length >= 4) {
       return {
-        replies: data.replies.slice(0, 3),
+        replies: data.replies.slice(0, 4),
         category: normalizeCategory(data.category || guessCategory(heard)),
         source: data.source || "ai",
       };

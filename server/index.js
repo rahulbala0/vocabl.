@@ -15,7 +15,7 @@ const CATEGORIES = ["Food", "Feelings", "People", "Help", "Chat"];
 
 const SYSTEM_PROMPT = `You generate replies for a nonverbal person using an AAC communication board.
 Return ONLY JSON, no markdown, no labels:
-{"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","..."]}
+{"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","...","..."]}
 Pick category from what the other person just said:
 - Food: eating, drinking, meals, hunger, thirst
 - Feelings: mood, pain, energy, how they are
@@ -23,10 +23,11 @@ Pick category from what the other person just said:
 - Help: bathroom, emergency, position, discomfort, stop
 - Chat: anything else, small talk, choices, general talk
 Each reply is a short first-person spoken line, under 10 words.
-The 3 replies MUST cover different intents, not rewordings:
+The 4 replies MUST cover different intents, not rewordings:
 1) agree / accept
 2) decline / not that
 3) ask a question back or something specific from the profile
+4) a neutral, clarifying, or topic-shifting response
 Sound like a real person, not a robot.`;
 
 function cleanReplies(parsed) {
@@ -34,8 +35,8 @@ function cleanReplies(parsed) {
   const cleaned = parsed
     .map((item) => String(item).trim())
     .filter(Boolean)
-    .slice(0, 3);
-  if (cleaned.length < 3) return null;
+    .slice(0, 4);
+  if (cleaned.length < 4) return null;
   return cleaned.map((line) =>
     line.split(/\s+/).length > 14 ? line.split(/\s+/).slice(0, 12).join(" ") : line
   );

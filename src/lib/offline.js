@@ -27,22 +27,22 @@ export function offlineReplies(heard) {
   if (orMatch) {
     const a = orMatch[1].replace(/^(do you want|would you like|is it|are you)\s+/i, "").trim();
     const b = orMatch[2].trim().replace(/\?$/, "");
-    return [`I'd like ${a}.`, `I'd like ${b}.`, "Neither of those."];
+    return [`I'd like ${a}.`, `I'd like ${b}.`, "Neither of those.", "Can you tell me more?"];
   }
 
   if (/how are you|how're you|how do you feel/.test(lower)) {
-    return ["I'm doing okay.", "I'm tired today.", "Pretty good, thanks."];
+    return ["I'm doing okay.", "I'm tired today.", "Pretty good, thanks.", "I've had better days."];
   }
 
   if (/hungry|eat|food|lunch|dinner|breakfast/.test(lower)) {
-    return ["Yes, I'm hungry.", "Not hungry yet.", "What is there to eat?"];
+    return ["Yes, I'm hungry.", "Not hungry yet.", "What is there to eat?", "Just a small snack."];
   }
 
   if (/\bhelp\b|hurt|pain|emergency/.test(lower)) {
-    return ["Yes, I need help.", "I'm okay for now.", "Please stay with me."];
+    return ["Yes, I need help.", "I'm okay for now.", "Please stay with me.", "Can you call someone?"];
   }
 
-  return ["Yes, that works.", "No, not that.", "Can you say that again?"];
+  return ["Yes, that works.", "No, not that.", "Can you say that again?", "Let me think about that."];
 }
 
 export function offlineSuggest(heard) {
