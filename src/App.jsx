@@ -308,19 +308,6 @@ export default function App() {
             </p>
           </div>
 
-          <div className="reply-list">
-            {tiles.map((tile, i) => (
-              <button
-                key={tile.id}
-                type="button"
-                className={`reply-btn slice-${i} ${i === selected ? "on" : ""}`}
-                onClick={() => { setSelected(i); activate(i); }}
-              >
-                {tile.label}
-              </button>
-            ))}
-          </div>
-
           <div className="reply-footer">
             <div className="footer-actions">
               <button
