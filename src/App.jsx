@@ -5,6 +5,7 @@ import { buildTiles, CATEGORIES } from "./lib/board";
 import { quadrantToIndex } from "./lib/joystick";
 import { browserSpeak, createListener, grokSpeak, speechRecognitionSupported } from "./lib/speech";
 import { loadSettings, saveSettings } from "./lib/storage";
+import CustomPhrases from "./CustomPhrases.jsx";
 import Wheel from "./Wheel.jsx";
 import "./App.css";
 
@@ -23,11 +24,12 @@ export default function App() {
   const [lastSpoken, setLastSpoken] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [bleState, setBleState] = useState("off");
-  const [status, setStatus] = useState("Arrows navigate · Enter speaks · Y=Yes · N=No");
+  const [status, setStatus] = useState("Click center or Enter to speak · hold for custom phrases");
   const [busy, setBusy] = useState(false);
   const [category, setCategory] = useState("Chat");
   const [typedHeard, setTypedHeard] = useState("");
   const [repliesVersion, setRepliesVersion] = useState(0);
+  const [showCustomEditor, setShowCustomEditor] = useState(false);
 
   const historyRef = useRef([]);
   const listenerRef = useRef(null);
@@ -44,7 +46,10 @@ export default function App() {
   selectedRef.current = selected;
   viewRef.current = view;
 
-  const tiles = useMemo(() => buildTiles({ suggestions, view }), [suggestions, view]);
+  const tiles = useMemo(
+    () => buildTiles({ suggestions, view, custom: settings.custom }),
+    [suggestions, view, settings.custom]
+  );
   tilesRef.current = tiles;
 
   const persist = (next) => { setSettings(next); saveSettings(next); };
@@ -187,6 +192,18 @@ export default function App() {
     }
   }, [speakText]);
 
+  const toggleCustomWheel = useCallback(() => {
+    if (viewRef.current === "custom") {
+      setView("board");
+      setSelected(0);
+      setStatus("Replies · hold click for custom phrases");
+    } else {
+      setView("custom");
+      setSelected(0);
+      setStatus("Custom phrases · hold click to go back");
+    }
+  }, []);
+
   const onCommand = useCallback(
     (cmd) => {
       if (cmd === "DISCONNECTED") {
@@ -195,7 +212,11 @@ export default function App() {
         bleRef.current = null;
         return;
       }
-      if (showSettings) return;
+      if (showSettings || showCustomEditor) return;
+      if (cmd === "HOLD") {
+        toggleCustomWheel();
+        return;
+      }
       if (cmd === "SELECT") {
         activate(selectedRef.current);
         return;
@@ -205,7 +226,7 @@ export default function App() {
       if (index == null) return;
       setSelected(index);
     },
-    [activate, showSettings]
+    [activate, showSettings, showCustomEditor, toggleCustomWheel]
   );
   commandRef.current = onCommand;
 
@@ -214,12 +235,11 @@ export default function App() {
     const dirMap = { ArrowUp: "UP", ArrowDown: "DOWN", ArrowLeft: "LEFT", ArrowRight: "RIGHT" };
 
     const onKeyDown = (e) => {
+      if (showCustomEditor) return;
       if (showSettings && e.key === "Escape") { setShowSettings(false); return; }
       if (showSettings) return;
       if (e.target.closest?.("input, textarea, select")) return;
 
-      if (e.key === "y" || e.key === "Y") { e.preventDefault(); speakText("Yes"); return; }
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); speakText("No"); return; }
       if (e.key === "l" || e.key === "L") { e.preventDefault(); toggleListen(); return; }
 
       const dir = dirMap[e.key];
@@ -232,7 +252,7 @@ export default function App() {
     };
 
     const onKeyUp = (e) => {
-      if (showSettings) return;
+      if (showCustomEditor || showSettings) return;
       if (e.target.closest?.("input, textarea, select")) return;
       if (e.key !== "Enter" && e.key !== " ") return;
       if (pressTimeRef.current === null) return;
@@ -241,16 +261,7 @@ export default function App() {
       pressTimeRef.current = null;
 
       if (elapsed > 700) {
-        // Long press → toggle between board and categories (Back)
-        if (viewRef.current === "categories") {
-          setView("board");
-          setSelected(0);
-          setStatus("Back to replies · hold Enter = topic menu");
-        } else {
-          setView("categories");
-          setSelected(0);
-          setStatus("Topic menu · hold Enter to go back");
-        }
+        toggleCustomWheel();
       } else {
         onCommand("SELECT");
       }
@@ -262,7 +273,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [onCommand, showSettings, speakText, toggleListen]);
+  }, [onCommand, showSettings, showCustomEditor, toggleListen, toggleCustomWheel]);
 
   async function connectBle() {
     try {
@@ -276,13 +287,25 @@ export default function App() {
     }
   }
 
+  if (showCustomEditor) {
+    return (
+      <CustomPhrases
+        phrases={settings.custom || []}
+        onChange={(phrases) => persist({ ...settings, custom: phrases })}
+        onClose={() => setShowCustomEditor(false)}
+      />
+    );
+  }
+
   return (
     <div className="app">
       {/* Slim caregiver header */}
       <header className="top">
         <div className="top-left">
           <h1>SpeakEasy</h1>
-          <span className="tag">{view === "categories" ? "Topics" : `${category} · ${aiSource}`}</span>
+          <span className="tag">
+            {view === "custom" ? "Custom phrases" : view === "categories" ? "Topics" : `${category} · ${aiSource}`}
+          </span>
         </div>
         <div className="caregiver-btns">
           <button
@@ -301,6 +324,9 @@ export default function App() {
           >
             {bleState === "on" ? "🎮 On" : "🎮"}
           </button>
+          <button type="button" onClick={() => setShowCustomEditor(true)} title="Edit custom phrases">
+            ✏
+          </button>
           <button type="button" onClick={() => setShowSettings(true)} title="Settings">⚙</button>
         </div>
       </header>
@@ -313,8 +339,8 @@ export default function App() {
             items={tiles}
             selected={selected}
             onChoose={(index) => { setSelected(index); activate(index); }}
-            onYes={() => speakText("Yes")}
-            onNo={() => speakText("No")}
+            onHubSelect={() => activate(selectedRef.current)}
+            onHubHold={toggleCustomWheel}
             busy={busy}
             speaking={speaking}
             listening={listening}
@@ -323,7 +349,7 @@ export default function App() {
             {speaking && <span className="pill live">Speaking</span>}
             {busy && <span className="pill">Thinking</span>}
             {settings.scanning && <span className="pill live">Scan</span>}
-            <span className="pill hint-pill">Hold Enter = back</span>
+            <span className="pill hint-pill">Hold click = custom</span>
           </div>
         </div>
 
@@ -351,7 +377,11 @@ export default function App() {
               >
                 {view === "categories" ? "Replies" : "Topics"}
               </button>
+              <button type="button" onClick={() => setShowCustomEditor(true)}>
+                Edit custom
+              </button>
             </div>
+            <p className="status">{status}</p>
             <form
               className="heard-form"
               onSubmit={(e) => {
@@ -368,9 +398,8 @@ export default function App() {
                 placeholder="Type what they said…"
                 aria-label="Type what they said"
               />
-              <button type="submit" className="primary" disabled={busy || !typedHeard.trim()}>→</button>
+              <button type="submit" className="primary" disabled={busy || !typedHeard.trim()}>Send</button>
             </form>
-            <p className="status">{status}</p>
           </div>
         </div>
       </div>

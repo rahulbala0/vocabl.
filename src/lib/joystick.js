@@ -68,6 +68,9 @@ export function createJoystickMapper({
   let calibrated = false;
   let lastQuad = null;
   let lastBtn = 0;
+  let pressAt = 0;
+  let holdSent = false;
+  const HOLD_MS = 700;
 
   return function mapSample(x, y, btn) {
     const pressed = btn ? 1 : 0;
@@ -102,6 +105,14 @@ export function createJoystickMapper({
     lastQuad = quad;
 
     if (pressed && !lastBtn) {
+      pressAt = Date.now();
+      holdSent = false;
+    }
+    if (pressed && lastBtn && !holdSent && Date.now() - pressAt >= HOLD_MS) {
+      commands.push("HOLD");
+      holdSent = true;
+    }
+    if (!pressed && lastBtn && !holdSent) {
       commands.push("SELECT");
     }
     lastBtn = pressed;
@@ -135,7 +146,7 @@ export function createJoystickCommandParser(onCommand) {
     }
 
     const pending = buf.trim().toUpperCase();
-    if (pending === "SELECT" || TOKEN_TO_QUADRANT[pending]) {
+    if (pending === "SELECT" || pending === "HOLD" || TOKEN_TO_QUADRANT[pending]) {
       emitLine(buf, mapSample, onCommand);
       buf = "";
     }
@@ -154,7 +165,7 @@ function emitLine(line, mapSample, onCommand) {
   }
 
   const token = trimmed.toUpperCase();
-  if (token === "SELECT" || TOKEN_TO_QUADRANT[token]) {
+  if (token === "SELECT" || token === "HOLD" || TOKEN_TO_QUADRANT[token]) {
     onCommand(token);
   }
 }

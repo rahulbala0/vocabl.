@@ -1,6 +1,7 @@
-// Offset so index-0 midpoint is at 12 o'clock (UP), giving the diamond orientation.
-// Standard formula: mid = (i+0.5)/n * 2π + offset = -π/2  →  offset = -3π/4
+import { useRef } from "react";
+
 const ANGLE_OFFSET = (-3 * Math.PI) / 4;
+const HOLD_MS = 700;
 
 function slicePath(index, count, cx = 50, cy = 50, r = 48) {
   const a0 = (index / count) * 2 * Math.PI + ANGLE_OFFSET;
@@ -23,12 +24,29 @@ function labelStyle(index, count) {
   };
 }
 
-export default function Wheel({ items, selected, onChoose, onYes, onNo, busy, speaking, listening }) {
+export default function Wheel({ items, selected, onChoose, onHubSelect, onHubHold, busy, speaking, listening }) {
   const count = Math.max(items.length, 1);
+  const pressAt = useRef(0);
 
   const wheelClass = ["wheel", listening && "is-listening", busy && "is-busy", speaking && "is-speaking"]
     .filter(Boolean)
     .join(" ");
+
+  function onPointerDown(event) {
+    event.preventDefault();
+    pressAt.current = Date.now();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function onPointerUp() {
+    const elapsed = Date.now() - pressAt.current;
+    pressAt.current = 0;
+    if (elapsed >= HOLD_MS) {
+      onHubHold?.();
+      return;
+    }
+    onHubSelect?.();
+  }
 
   return (
     <div className={wheelClass} role="listbox" aria-label="Reply wheel">
@@ -40,9 +58,7 @@ export default function Wheel({ items, selected, onChoose, onYes, onNo, busy, sp
             className={`slice slice-${i} ${i === selected ? "on" : ""}`}
           />
         ))}
-        {/* Hub: top half = Yes (green), bottom half = No (red), clipped by border-radius on wrapper */}
-        <path d="M 36 50 A 14 14 0 0 1 64 50 Z" className="hub-yes-bg" />
-        <path d="M 64 50 A 14 14 0 0 1 36 50 Z" className="hub-no-bg" />
+        <circle cx="50" cy="50" r="14" className="hub-select-bg" />
       </svg>
 
       {items.map((item, i) => (
@@ -59,15 +75,18 @@ export default function Wheel({ items, selected, onChoose, onYes, onNo, busy, sp
         </button>
       ))}
 
-      {/* Yes/No hub — wrapper clips both halves to a circle */}
-      <div className="hub-wrapper">
-        <button type="button" className="hub hub-yes" onClick={onYes} aria-label="Say Yes">
-          Yes
-        </button>
-        <button type="button" className="hub hub-no" onClick={onNo} aria-label="Say No">
-          No
-        </button>
-      </div>
+      <button
+        type="button"
+        className="hub-select"
+        aria-label="Click to speak the highlighted reply. Hold for custom phrases."
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          pressAt.current = 0;
+        }}
+      >
+        OK
+      </button>
     </div>
   );
 }

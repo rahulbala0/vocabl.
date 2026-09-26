@@ -8,12 +8,21 @@ export const CATEGORIES = {
   Help: ["I need help.", "Bathroom, please.", "That's too loud.", "Please adjust my position."],
 };
 
-export function buildTiles({ suggestions, view }) {
+export function buildTiles({ suggestions, view, custom = [] }) {
   if (view === "categories") {
     return CATEGORY_ORDER.map((name) => ({
       id: `cat-${name}`,
       label: name,
       kind: "category",
+    }));
+  }
+
+  if (view === "custom") {
+    const phrases = (custom.length ? custom : ["Please wait a moment."]).slice(0, 4);
+    return phrases.map((label, i) => ({
+      id: `custom-${i}`,
+      label: label || `Phrase ${i + 1}`,
+      kind: "speak",
     }));
   }
 
