@@ -8,7 +8,7 @@ export function bluetoothSupported() {
   return typeof navigator !== "undefined" && Boolean(navigator.bluetooth);
 }
 
-export async function connectSpeakEasy(onCommand) {
+export async function connectSpeakEasy(onCommand, { calibration = null, onSample } = {}) {
   if (!bluetoothSupported()) {
     throw new Error("Web Bluetooth needs Chrome (not iOS).");
   }
@@ -28,10 +28,10 @@ export async function connectSpeakEasy(onCommand) {
   const write = await service.getCharacteristic(CHAR_WRITE);
 
   const decoder = new TextDecoder("utf-8");
-  const parse = createJoystickCommandParser(onCommand);
+  const parser = createJoystickCommandParser(onCommand, { calibration, onSample });
   const handler = (event) => {
     const text = decoder.decode(event.target.value);
-    if (text) parse(text);
+    if (text) parser.push(text);
   };
   await notify.startNotifications();
   notify.addEventListener("characteristicvaluechanged", handler);
@@ -52,6 +52,7 @@ export async function connectSpeakEasy(onCommand) {
 
   return {
     device,
+    setCalibration: parser.setCalibration,
     pingLed: async () => {
       const payload = new TextEncoder().encode("SELECT");
       try {

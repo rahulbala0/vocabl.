@@ -1,26 +1,116 @@
-import { guessCategory, normalizeCategory, offlineSuggest } from "./offline";
+import { guessCategory, normalizeCategory, offlineReplies, offlineSuggest } from "./offline";
 
-export async function fetchSuggestions({ profile, heard, history, provider, customPrompt }) {
+async function requestSuggestions(body) {
+  const res = await fetch("/api/suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.detail || data.error || `suggest failed (${res.status})`);
+  }
+  if (Array.isArray(data.replies) && data.replies.length >= 4) {
+    return {
+      replies: data.replies.slice(0, 4),
+      category: normalizeCategory(data.category || guessCategory(body.heard)),
+      source: data.source || "ai",
+      facts: Array.isArray(data.facts) ? data.facts : [],
+    };
+  }
+  throw new Error("bad payload");
+}
+
+function memoryFields(body) {
+  return {
+    facts: body.facts,
+    summaries: body.summaries,
+    alternatives: body.alternatives,
+    lowConfidence: body.lowConfidence,
+  };
+}
+
+export async function fetchSuggestions({ profile, heard, history, provider, customPrompt, ...memory }) {
   try {
-    const res = await fetch("/api/suggest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile, heard, history, provider, customPrompt }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.detail || data.error || `suggest failed (${res.status})`);
-    }
-    if (Array.isArray(data.replies) && data.replies.length >= 4) {
-      return {
-        replies: data.replies.slice(0, 4),
-        category: normalizeCategory(data.category || guessCategory(heard)),
-        source: data.source || "ai",
-      };
-    }
-    throw new Error("bad payload");
+    return await requestSuggestions({ profile, heard, history, provider, customPrompt, ...memoryFields(memory) });
   } catch (err) {
     console.error("AI suggest failed", err);
     return { ...offlineSuggest(heard), error: String(err.message || err) };
+  }
+}
+
+const replyKey = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Asks for 4 replies that differ from `avoid`. Resolves to null when 4 new replies can't be
+ * found, so the caller can keep what is already on the wheel.
+ */
+export async function fetchNewSuggestions({
+  profile,
+  heard,
+  history,
+  provider,
+  customPrompt,
+  avoid,
+  facts,
+  summaries,
+  alternatives,
+  lowConfidence,
+}) {
+  const seen = new Set(avoid.map(replyKey));
+  const fresh = [];
+  const take = (lines) => {
+    for (const line of lines) {
+      const key = replyKey(line);
+      if (!key || seen.has(key) || fresh.length >= 4) continue;
+      seen.add(key);
+      fresh.push(line);
+    }
+  };
+
+  let category = normalizeCategory(guessCategory(heard));
+  let source = "offline";
+  let error = "";
+  let extraFacts = [];
+  try {
+    const result = await requestSuggestions({
+      profile,
+      heard,
+      history,
+      provider,
+      customPrompt,
+      avoid,
+      ...memoryFields({ facts, summaries, alternatives, lowConfidence }),
+    });
+    take(result.replies);
+    category = result.category;
+    source = result.source;
+    extraFacts = result.facts;
+  } catch (err) {
+    console.error("AI refresh failed", err);
+    error = String(err.message || err);
+  }
+  take(offlineReplies(heard));
+
+  if (fresh.length < 4) return { replies: null, error: error || "no different replies found" };
+  return { replies: fresh, category, source, error, facts: extraFacts };
+}
+
+export async function fetchSummary({ profile, history, facts }) {
+  try {
+    const res = await fetch("/api/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile, history, facts }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || data.error || `summarize failed (${res.status})`);
+    return {
+      summary: String(data.summary || "").trim(),
+      facts: Array.isArray(data.facts) ? data.facts : [],
+    };
+  } catch (err) {
+    console.error("AI summarize failed", err);
+    return { summary: "", facts: [], error: String(err.message || err) };
   }
 }

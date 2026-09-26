@@ -7,9 +7,13 @@ export const DEFAULT_SETTINGS = {
   voice: "grok",
   scanning: false,
   scanMs: 1100,
+  readOptions: false,
+  joystickCalibration: null,
   custom: ["I love you.", "Please wait a moment.", "That made me laugh.", "I need a break."],
   customPrompt:
     "Keep replies warm and direct. Prefer everyday words. If they offer a choice, answer the choice.",
+  facts: [],
+  summaries: [],
 };
 
 export function loadSettings() {

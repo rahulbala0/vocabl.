@@ -1,23 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bluetoothSupported, connectSpeakEasy } from "./lib/ble";
-import { fetchSuggestions } from "./lib/ai";
+import { fetchNewSuggestions, fetchSuggestions, fetchSummary } from "./lib/ai";
+import { applyAskAgain, fallbackSummary, isLowConfidence, MAX_SUMMARIES, mergeFacts, SILENCE_MS } from "./lib/memory";
 import { buildTiles, CATEGORIES } from "./lib/board";
 import { quadrantToIndex } from "./lib/joystick";
-import { browserSpeak, createListener, grokSpeak, speechRecognitionSupported } from "./lib/speech";
+import {
+  browserSpeak,
+  createListener,
+  grokSpeak,
+  previewSpeak,
+  speechRecognitionSupported,
+  stopPreview,
+} from "./lib/speech";
 import { loadSettings, saveSettings } from "./lib/storage";
+import CalibrationWizard from "./CalibrationWizard.jsx";
 import CustomPhrases from "./CustomPhrases.jsx";
+import JoystickSettings from "./JoystickSettings.jsx";
+import MemorySettings from "./MemorySettings.jsx";
 import Wheel from "./Wheel.jsx";
 import "./App.css";
 
 const STARTER = ["I'm listening.", "Give me a second.", "Tell me more.", "Go ahead."];
+// Keeps the mic off briefly after speech ends so it doesn't catch the tail of the audio.
+const MIC_RESUME_DELAY_MS = 300;
 
 export default function App() {
   const [settings, setSettings] = useState(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
+  const [calibrating, setCalibrating] = useState(false);
   const [view, setView] = useState("board");
   const [suggestions, setSuggestions] = useState(STARTER);
   const [aiSource, setAiSource] = useState("ready");
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(-1);
   const [listening, setListening] = useState(false);
   const [heard, setHeard] = useState("");
   const [interim, setInterim] = useState("");
@@ -30,21 +44,36 @@ export default function App() {
   const [typedHeard, setTypedHeard] = useState("");
   const [repliesVersion, setRepliesVersion] = useState(0);
   const [showCustomEditor, setShowCustomEditor] = useState(false);
+  const [heardAlts, setHeardAlts] = useState([]);
 
   const historyRef = useRef([]);
   const listenerRef = useRef(null);
   const bleRef = useRef(null);
   const settingsRef = useRef(settings);
-  const selectedRef = useRef(0);
+  const selectedRef = useRef(-1);
   const tilesRef = useRef([]);
   const handlingRef = useRef(false);
   const commandRef = useRef(null);
   const pressTimeRef = useRef(null);
   const viewRef = useRef(view);
+  const suggestionsRef = useRef(suggestions);
+  const heardRef = useRef(heard);
+  const busyRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const rejectedRef = useRef([]);
+  const speakingRef = useRef(false);
+  const micHoldRef = useRef(0);
+  const sampleListenersRef = useRef(new Set());
+  const heardAltsRef = useRef([]);
+  const lastActivityRef = useRef(Date.now());
+  const endingRef = useRef(false);
 
   settingsRef.current = settings;
   selectedRef.current = selected;
   viewRef.current = view;
+  suggestionsRef.current = suggestions;
+  heardRef.current = heard;
+  busyRef.current = busy;
 
   const tiles = useMemo(
     () => buildTiles({ suggestions, view, custom: settings.custom }),
@@ -54,10 +83,79 @@ export default function App() {
 
   const persist = (next) => { setSettings(next); saveSettings(next); };
 
+  function suggestContext() {
+    const s = settingsRef.current;
+    return {
+      facts: (s.facts || []).map((line) => String(line).trim()).filter(Boolean),
+      summaries: (s.summaries || []).map((row) => row.text).filter(Boolean).slice(-8),
+      alternatives: heardAltsRef.current,
+      lowConfidence: isLowConfidence(heardAltsRef.current),
+    };
+  }
+
+  function rememberFacts(incoming) {
+    if (!incoming?.length) return;
+    const next = mergeFacts(settingsRef.current.facts, incoming);
+    persist({ ...settingsRef.current, facts: next });
+  }
+
+  const endConversation = useCallback(async () => {
+    const history = historyRef.current;
+    if (endingRef.current || history.length < 2) return;
+    endingRef.current = true;
+    historyRef.current = [];
+    lastActivityRef.current = Date.now();
+    try {
+      const s = settingsRef.current;
+      const result = await fetchSummary({ profile: s.profile, history, facts: s.facts || [] });
+      const text = result.summary || fallbackSummary(history);
+      if (!text) return;
+      persist({
+        ...settingsRef.current,
+        facts: mergeFacts(settingsRef.current.facts, result.facts),
+        summaries: [
+          ...(settingsRef.current.summaries || []),
+          { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, at: new Date().toISOString(), text },
+        ].slice(-MAX_SUMMARIES),
+      });
+    } finally {
+      endingRef.current = false;
+    }
+  }, []);
+
+  // Previews and replies can overlap, so the mic resumes only when nothing is holding it.
+  const holdMic = useCallback(() => {
+    micHoldRef.current += 1;
+    if (micHoldRef.current === 1) listenerRef.current?.pause();
+  }, []);
+
+  const releaseMic = useCallback(() => {
+    setTimeout(() => {
+      micHoldRef.current = Math.max(0, micHoldRef.current - 1);
+      if (micHoldRef.current === 0) listenerRef.current?.resume();
+    }, MIC_RESUME_DELAY_MS);
+  }, []);
+
+  const announce = useCallback((text) => {
+    holdMic();
+    previewSpeak(text, releaseMic);
+  }, [holdMic, releaseMic]);
+
+  const subscribeSamples = useCallback((listener) => {
+    sampleListenersRef.current.add(listener);
+    return () => sampleListenersRef.current.delete(listener);
+  }, []);
+
+  useEffect(() => {
+    bleRef.current?.setCalibration(settings.joystickCalibration);
+  }, [settings.joystickCalibration]);
+
   const speakText = useCallback(async (text) => {
     if (!text) return;
+    speakingRef.current = true;
     setSpeaking(true);
-    listenerRef.current?.pause();
+    holdMic();
+    stopPreview();
     setLastSpoken(text);
     setStatus(`Speaking: ${text}`);
     try {
@@ -67,27 +165,46 @@ export default function App() {
         await browserSpeak(text);
       }
     } finally {
+      speakingRef.current = false;
       setSpeaking(false);
-      listenerRef.current?.resume();
+      releaseMic();
       bleRef.current?.pingLed();
     }
-  }, []);
+  }, [holdMic, releaseMic]);
+
+  useEffect(() => {
+    if (!settings.readOptions || showSettings || showCustomEditor || selected < 0) {
+      stopPreview();
+      return;
+    }
+    if (speakingRef.current) return;
+    const tile = tiles[selected];
+    if (!tile) return;
+    holdMic();
+    previewSpeak(tile.label, releaseMic);
+  }, [selected, tiles, settings.readOptions, showSettings, showCustomEditor, holdMic, releaseMic]);
 
   const requestReplies = useCallback(async (text) => {
     if (!text) return;
+    const requestId = ++requestIdRef.current;
+    rejectedRef.current = [];
     setBusy(true);
     setStatus("Thinking of replies…");
+    const ctx = suggestContext();
     const result = await fetchSuggestions({
       profile: settingsRef.current.profile,
       heard: text,
       history: historyRef.current,
       provider: settingsRef.current.provider,
       customPrompt: settingsRef.current.customPrompt,
+      ...ctx,
     });
-    setSuggestions(result.replies);
+    if (requestId !== requestIdRef.current) return;
+    rememberFacts(result.facts);
+    setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
     setCategory(result.category || "Chat");
     setAiSource(result.source);
-    setSelected(0);
+    setSelected(-1);
     setView("board");
     setRepliesVersion((v) => v + 1);
     setBusy(false);
@@ -98,7 +215,53 @@ export default function App() {
     }
   }, []);
 
-  const onHeard = useCallback((text) => {
+  const refreshReplies = useCallback(async () => {
+    if (busyRef.current) return;
+    if (viewRef.current !== "board") {
+      setStatus("New replies only work on the reply wheel.");
+      return;
+    }
+    const shown = suggestionsRef.current;
+    const avoid = [...rejectedRef.current, ...shown].slice(-16);
+    const requestId = ++requestIdRef.current;
+    busyRef.current = true;
+    setBusy(true);
+    setStatus("Getting different replies…");
+    const ctx = suggestContext();
+    const result = await fetchNewSuggestions({
+      profile: settingsRef.current.profile,
+      heard: heardRef.current,
+      history: historyRef.current,
+      provider: settingsRef.current.provider,
+      customPrompt: settingsRef.current.customPrompt,
+      avoid,
+      ...ctx,
+    });
+    if (requestId !== requestIdRef.current) return;
+    setBusy(false);
+    if (!result.replies) {
+      setStatus(`Couldn't get new replies, kept these · ${result.error}`);
+      return;
+    }
+    rememberFacts(result.facts);
+    rejectedRef.current = avoid;
+    setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
+    setCategory(result.category || "Chat");
+    setAiSource(result.source);
+    setSelected(-1);
+    setRepliesVersion((v) => v + 1);
+    setStatus(`New replies from ${result.source}`);
+  }, []);
+
+  const onHeard = useCallback((payload) => {
+    const text = typeof payload === "string" ? payload : payload?.text;
+    if (!text) return;
+    const alternatives = typeof payload === "string"
+      ? [{ text, confidence: 1 }]
+      : (payload.alternatives?.length ? payload.alternatives : [{ text, confidence: 0 }]);
+    lastActivityRef.current = Date.now();
+    heardAltsRef.current = alternatives;
+    setHeardAlts(alternatives);
     setHeard(text);
     setInterim("");
     historyRef.current = [...historyRef.current, `Other: ${text}`].slice(-8);
@@ -109,7 +272,10 @@ export default function App() {
   useEffect(() => {
     const listener = createListener({
       onFinal: onHeard,
-      onInterim: setInterim,
+      onInterim: (text) => {
+        lastActivityRef.current = Date.now();
+        setInterim(text);
+      },
       onError: (err) => setStatus(`Mic: ${err}`),
     });
     listenerRef.current = listener;
@@ -122,6 +288,28 @@ export default function App() {
 
     return () => listener.stop();
   }, [onHeard]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= SILENCE_MS) {
+        endConversation();
+      }
+    }, 15000);
+    return () => clearInterval(id);
+  }, [endConversation]);
+
+  useEffect(() => {
+    const onHide = () => { endConversation(); };
+    window.addEventListener("pagehide", onHide);
+    const onVis = () => {
+      if (document.visibilityState === "hidden") onHide();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [endConversation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,15 +365,17 @@ export default function App() {
         setSuggestions(CATEGORIES[tile.label]);
         setCategory(tile.label);
         setView("board");
-        setSelected(0);
+        setSelected(-1);
         setAiSource("category");
         setRepliesVersion((v) => v + 1);
         setStatus(`${tile.label} phrases`);
         return;
       }
       if (tile.kind === "speak") {
+        lastActivityRef.current = Date.now();
         historyRef.current = [...historyRef.current, `Me: ${tile.label}`].slice(-8);
         await speakText(tile.label);
+        setSelected((current) => (current === index ? -1 : current));
       }
     } finally {
       handlingRef.current = false;
@@ -195,11 +385,11 @@ export default function App() {
   const toggleCustomWheel = useCallback(() => {
     if (viewRef.current === "custom") {
       setView("board");
-      setSelected(0);
+      setSelected(-1);
       setStatus("Replies · hold click for custom phrases");
     } else {
       setView("custom");
-      setSelected(0);
+      setSelected(-1);
       setStatus("Custom phrases · hold click to go back");
     }
   }, []);
@@ -221,12 +411,16 @@ export default function App() {
         activate(selectedRef.current);
         return;
       }
+      if (cmd === "DOUBLE") {
+        refreshReplies();
+        return;
+      }
       if (settingsRef.current.scanning) return;
       const index = quadrantToIndex(cmd, tilesRef.current.length);
       if (index == null) return;
       setSelected(index);
     },
-    [activate, showSettings, showCustomEditor, toggleCustomWheel]
+    [activate, refreshReplies, showSettings, showCustomEditor, toggleCustomWheel]
   );
   commandRef.current = onCommand;
 
@@ -236,11 +430,16 @@ export default function App() {
 
     const onKeyDown = (e) => {
       if (showCustomEditor) return;
-      if (showSettings && e.key === "Escape") { setShowSettings(false); return; }
+      if (showSettings && e.key === "Escape") { setShowSettings(false); setCalibrating(false); return; }
       if (showSettings) return;
       if (e.target.closest?.("input, textarea, select")) return;
 
       if (e.key === "l" || e.key === "L") { e.preventDefault(); toggleListen(); return; }
+      if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!e.repeat) refreshReplies();
+        return;
+      }
 
       const dir = dirMap[e.key];
       if (dir) { e.preventDefault(); onCommand(dir); return; }
@@ -273,12 +472,15 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [onCommand, showSettings, showCustomEditor, toggleListen, toggleCustomWheel]);
+  }, [onCommand, showSettings, showCustomEditor, toggleListen, toggleCustomWheel, refreshReplies]);
 
   async function connectBle() {
     try {
       setBleState("connecting");
-      bleRef.current = await connectSpeakEasy((cmd) => commandRef.current?.(cmd));
+      bleRef.current = await connectSpeakEasy((cmd) => commandRef.current?.(cmd), {
+        calibration: settingsRef.current.joystickCalibration,
+        onSample: (sample) => sampleListenersRef.current.forEach((listener) => listener(sample)),
+      });
       setBleState("on");
       setStatus("Joystick connected");
     } catch (err) {
@@ -293,6 +495,7 @@ export default function App() {
         phrases={settings.custom || []}
         onChange={(phrases) => persist({ ...settings, custom: phrases })}
         onClose={() => setShowCustomEditor(false)}
+        onSpeak={speakText}
       />
     );
   }
@@ -339,6 +542,7 @@ export default function App() {
             items={tiles}
             selected={selected}
             onChoose={(index) => { setSelected(index); activate(index); }}
+            onHover={settings.readOptions && !settings.scanning ? setSelected : undefined}
             onHubSelect={() => activate(selectedRef.current)}
             onHubHold={toggleCustomWheel}
             busy={busy}
@@ -360,14 +564,30 @@ export default function App() {
             <p className="heard-text">
               {interim || heard || <span className="muted">waiting…</span>}
             </p>
+            {!interim && heardAlts.length > 1 && (
+              <ul className="heard-alts">
+                {heardAlts.map((alt) => (
+                  <li key={alt.text}>
+                    {alt.text}
+                    {Number.isFinite(alt.confidence) && alt.confidence > 0 && (
+                      <span>{Math.round(alt.confidence * 100)}%</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!interim && isLowConfidence(heardAlts) && (
+              <p className="heard-warn">Low confidence — the mic may have misheard this.</p>
+            )}
           </div>
 
           <div className="reply-footer">
             <div className="footer-actions">
               <button
                 type="button"
-                onClick={() => heard ? requestReplies(heard) : setStatus("Nothing heard yet.")}
-                disabled={busy || !heard}
+                onClick={refreshReplies}
+                disabled={busy || view !== "board"}
+                title="New replies (R, or double-click the joystick)"
               >
                 New replies
               </button>
@@ -404,7 +624,23 @@ export default function App() {
         </div>
       </div>
 
-      {showSettings && (
+      {showSettings && calibrating && (
+        <div className="overlay" role="dialog" aria-label="Joystick calibration">
+          <CalibrationWizard
+            subscribeSamples={subscribeSamples}
+            announce={announce}
+            onSave={(calibration) => {
+              stopPreview();
+              persist({ ...settings, joystickCalibration: calibration });
+              setCalibrating(false);
+              setStatus("Joystick calibration saved");
+            }}
+            onCancel={() => { stopPreview(); setCalibrating(false); }}
+          />
+        </div>
+      )}
+
+      {showSettings && !calibrating && (
         <div className="overlay" role="dialog" aria-label="Settings">
           <div className="panel">
             <h2>Settings</h2>
@@ -437,6 +673,11 @@ export default function App() {
               </select>
             </label>
             <label className="check">
+              <input type="checkbox" checked={settings.readOptions}
+                onChange={(e) => persist({ ...settings, readOptions: e.target.checked })} />
+              Read options aloud when highlighted
+            </label>
+            <label className="check">
               <input type="checkbox" checked={settings.scanning}
                 onChange={(e) => persist({ ...settings, scanning: e.target.checked })} />
               Scanning mode
@@ -446,6 +687,21 @@ export default function App() {
               <input type="number" min="500" step="100" value={settings.scanMs}
                 onChange={(e) => persist({ ...settings, scanMs: Number(e.target.value) })} />
             </label>
+            <MemorySettings
+              facts={settings.facts || []}
+              summaries={settings.summaries || []}
+              onChange={({ facts, summaries }) => persist({ ...settings, facts, summaries })}
+            />
+            <JoystickSettings
+              connected={bleState === "on"}
+              connecting={bleState === "connecting"}
+              canConnect={bluetoothSupported()}
+              onConnect={connectBle}
+              calibration={settings.joystickCalibration}
+              subscribeSamples={subscribeSamples}
+              onCalibrate={() => setCalibrating(true)}
+              onReset={() => persist({ ...settings, joystickCalibration: null })}
+            />
             <div className="actions">
               <button type="button" className="primary" onClick={() => setShowSettings(false)}>Close</button>
               {lastSpoken && (

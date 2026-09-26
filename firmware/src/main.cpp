@@ -7,6 +7,9 @@
 //   Joystick SW  -> GPIO32 (INPUT_PULLUP, pressed = LOW)
 //   Joystick VCC -> 3.3V, GND -> GND
 //   Status LED   -> GPIO2 (blinks when the tablet writes SELECT)
+//
+// With VCC on 3.3V and 11 dB attenuation the stick rests around 1900-2100. A resting value
+// near 2900 usually means VCC is on 5V, so one side clips at 4095 long before full travel.
 
 #include <Arduino.h>
 #include <BLEDevice.h>
@@ -66,6 +69,9 @@ void setup()
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
     analogReadResolution(12);
+    // 11 dB lets GPIO34/35 read the full 0-3.3V swing instead of saturating early.
+    analogSetPinAttenuation(PIN_JOY_X, ADC_11db);
+    analogSetPinAttenuation(PIN_JOY_Y, ADC_11db);
 
     BLEDevice::init(DEVICE_NAME);
     BLEServer *server = BLEDevice::createServer();

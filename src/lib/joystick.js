@@ -1,22 +1,29 @@
-const ADC_MAX = 4095;
+import { correct, defaultCalibration, directionFromAngle, OPPOSITE } from "./calibration";
+
+export { DIRECTIONS } from "./calibration";
+
 const REST_DEFAULT = 2900;
-const DEADZONE_FRAC = 0.18;
-const CALIB_SAMPLES = 40;
+export const ENGAGE_FRAC = 0.45;
+const RELEASE_FRAC = 0.3;
+const STEADY_SAMPLES = 3;
+const STEADY_DELTA = 0.08;
+const REBOUND_MS = 150;
+const PRESS_LOCK_MS = 300;
+const DOUBLE_CLICK_MS = 400;
+const HOLD_MS = 700;
+const AUTO_CENTER_SAMPLES = 40;
 
-export const QUADRANTS = ["NE", "SE", "SW", "NW"];
-
-/** Wheel slices start at north and go clockwise: NE, SE, SW, NW. */
-const QUADRANT_INDEX = { NE: 0, SE: 1, SW: 2, NW: 3 };
+const QUADRANT_INDEX = { UP: 0, RIGHT: 1, DOWN: 2, LEFT: 3 };
 
 const TOKEN_TO_QUADRANT = {
-  NE: "NE",
-  SE: "SE",
-  SW: "SW",
-  NW: "NW",
-  UP: "NE",
-  RIGHT: "SE",
-  DOWN: "SW",
-  LEFT: "NW",
+  UP: "UP",
+  RIGHT: "RIGHT",
+  DOWN: "DOWN",
+  LEFT: "LEFT",
+  NE: "UP",
+  SE: "RIGHT",
+  SW: "DOWN",
+  NW: "LEFT",
 };
 
 export function quadrantToIndex(quadrant, count) {
@@ -24,23 +31,6 @@ export function quadrantToIndex(quadrant, count) {
   const key = TOKEN_TO_QUADRANT[String(quadrant || "").toUpperCase()];
   if (!key) return null;
   return QUADRANT_INDEX[key] % count;
-}
-
-function axisNorm(raw, rest) {
-  const delta = raw - rest;
-  const span = delta >= 0 ? ADC_MAX - rest : rest;
-  if (span <= 0) return 0;
-  const n = delta / span;
-  if (n > 1) return 1;
-  if (n < -1) return -1;
-  return n;
-}
-
-function quadrantFromAxes(nx, ny) {
-  if (nx === 0 && ny === 0) return null;
-  let ang = (Math.atan2(nx, -ny) * 180) / Math.PI;
-  if (ang < 0) ang += 360;
-  return QUADRANTS[Math.floor(ang / 90) % 4];
 }
 
 export function parseJoystickLine(text) {
@@ -55,77 +45,207 @@ export function parseJoystickLine(text) {
   return { x, y, btn: btn ? 1 : 0 };
 }
 
-export function createJoystickMapper({
-  restDefault = REST_DEFAULT,
-  deadzone = DEADZONE_FRAC,
-  calibSamples = CALIB_SAMPLES,
+/**
+ * Turns corrected stick positions into direction commands, one movement at a time.
+ * A movement runs from leaving the center (past `engage`) to coming back (below `release`).
+ * It commits early if the stick is held steady in one zone; otherwise it commits the zone of
+ * the strongest push when the stick returns, so readings taken mid-flick or during the
+ * spring-back don't count. Right after a movement ends, the opposite direction is ignored
+ * for `reboundMs` so the spring overshooting center doesn't register.
+ */
+export function createDirectionDetector({
+  engage = ENGAGE_FRAC,
+  release = RELEASE_FRAC,
+  steadySamples = STEADY_SAMPLES,
+  steadyDelta = STEADY_DELTA,
+  reboundMs = REBOUND_MS,
 } = {}) {
-  let restX = restDefault;
-  let restY = restDefault;
-  let calibN = 0;
-  let calibSx = 0;
-  let calibSy = 0;
-  let calibrated = false;
-  let lastQuad = null;
-  let lastBtn = 0;
-  let pressAt = 0;
-  let holdSent = false;
-  const HOLD_MS = 700;
+  let moving = false;
+  let startedAt = 0;
+  let peak = null;
+  let committed = null;
+  let count = 0;
+  let recent = [];
+  let rebound = null;
 
-  return function mapSample(x, y, btn) {
-    const pressed = btn ? 1 : 0;
+  const isRebound = (dir, time) => rebound && dir === rebound.dir && time < rebound.until;
 
-    if (!calibrated) {
-      calibN += 1;
-      calibSx += x;
-      calibSy += y;
-      if (calibN >= calibSamples) {
-        restX = calibSx / calibN;
-        restY = calibSy / calibN;
-        calibrated = true;
+  return {
+    reset() {
+      moving = false;
+      peak = null;
+      committed = null;
+      recent = [];
+    },
+
+    feed({ mag, angle }, now) {
+      if (!moving) {
+        if (mag <= engage) return null;
+        moving = true;
+        startedAt = now;
+        peak = { mag, angle };
+        committed = null;
+        count = 0;
+        recent = [];
       }
-      lastBtn = pressed;
+
+      if (mag < release) {
+        moving = false;
+        let out = null;
+        if (!committed && count >= 2) {
+          const dir = directionFromAngle(peak.angle);
+          if (!isRebound(dir, startedAt)) {
+            committed = dir;
+            out = dir;
+          }
+        }
+        if (committed) rebound = { dir: OPPOSITE[committed], until: now + reboundMs };
+        return out;
+      }
+
+      count += 1;
+      if (mag > peak.mag) peak = { mag, angle };
+      recent.push({ mag, dir: directionFromAngle(angle) });
+      if (recent.length > steadySamples) recent.shift();
+
+      if (recent.length === steadySamples && mag > engage) {
+        const dir = recent[0].dir;
+        const mags = recent.map((s) => s.mag);
+        const steady = recent.every((s) => s.dir === dir) && Math.max(...mags) - Math.min(...mags) <= steadyDelta;
+        if (steady && dir !== committed && !isRebound(dir, now)) {
+          committed = dir;
+          return dir;
+        }
+      }
       return null;
-    }
-
-    let nx = axisNorm(x, restX);
-    let ny = axisNorm(y, restY);
-    const mag = Math.hypot(nx, ny);
-    if (mag <= deadzone) {
-      nx = 0;
-      ny = 0;
-    }
-
-    const quad = quadrantFromAxes(nx, ny);
-    const commands = [];
-
-    if (quad && quad !== lastQuad) {
-      commands.push(quad);
-    }
-    lastQuad = quad;
-
-    if (pressed && !lastBtn) {
-      pressAt = Date.now();
-      holdSent = false;
-    }
-    if (pressed && lastBtn && !holdSent && Date.now() - pressAt >= HOLD_MS) {
-      commands.push("HOLD");
-      holdSent = true;
-    }
-    if (!pressed && lastBtn && !holdSent) {
-      commands.push("SELECT");
-    }
-    lastBtn = pressed;
-
-    return commands.length ? commands : null;
+    },
   };
 }
 
-export function createJoystickCommandParser(onCommand) {
-  const mapSample = createJoystickMapper();
+/**
+ * Raw `x,y,btn` samples -> commands. Uses the saved calibration when there is one; otherwise
+ * measures the resting position from the first samples after connecting.
+ */
+export function createJoystickMapper({ calibration = null, pressLockMs = PRESS_LOCK_MS } = {}) {
+  let cal = calibration;
+  let autoN = 0;
+  let autoSx = 0;
+  let autoSy = 0;
+  const detector = createDirectionDetector();
+  let lastBtn = 0;
+  let pressAt = 0;
+  let releaseAt = 0;
+  let holdSent = false;
+
+  function map(x, y, btn, now = Date.now()) {
+    const pressed = btn ? 1 : 0;
+    const commands = [];
+
+    if (!cal) {
+      autoN += 1;
+      autoSx += x;
+      autoSy += y;
+      if (autoN >= AUTO_CENTER_SAMPLES) cal = defaultCalibration(autoSx / autoN, autoSy / autoN);
+      lastBtn = pressed;
+      return { commands, corrected: null };
+    }
+
+    if (pressed && !lastBtn) {
+      pressAt = now;
+      holdSent = false;
+    }
+    if (!pressed && lastBtn) releaseAt = now;
+
+    const corrected = correct(cal, x, y);
+    // Pressing the stick wobbles it, so ignore movement while the button is down and just after.
+    if (pressed || now - releaseAt < pressLockMs) {
+      detector.reset();
+    } else {
+      const dir = detector.feed(corrected, now);
+      if (dir) commands.push(dir);
+    }
+
+    if (pressed && lastBtn && !holdSent && now - pressAt >= HOLD_MS) {
+      commands.push("HOLD");
+      holdSent = true;
+    }
+    if (!pressed && lastBtn && !holdSent) commands.push("CLICK");
+    lastBtn = pressed;
+
+    return { commands, corrected };
+  }
+
+  return {
+    map,
+    getCalibration: () => cal,
+    setCalibration(next) {
+      cal = next || null;
+      autoN = 0;
+      autoSx = 0;
+      autoSy = 0;
+      detector.reset();
+    },
+  };
+}
+
+/**
+ * Turns CLICKs into SELECT or DOUBLE. A lone click becomes SELECT once the double-click
+ * window passes; other commands arriving meanwhile are held so SELECT still applies to the
+ * slice that was highlighted when the button was clicked.
+ */
+export function createClickCombiner(onCommand, windowMs = DOUBLE_CLICK_MS) {
+  let timer = null;
+  let queued = [];
+
+  function resolve(cmd) {
+    clearTimeout(timer);
+    timer = null;
+    onCommand(cmd);
+    const held = queued;
+    queued = [];
+    held.forEach(onCommand);
+  }
+
+  return function push(cmd) {
+    if (cmd === "CLICK" || cmd === "SELECT") {
+      if (timer) resolve("DOUBLE");
+      else timer = setTimeout(() => resolve("SELECT"), windowMs);
+      return;
+    }
+    if (timer) {
+      queued.push(cmd);
+      return;
+    }
+    onCommand(cmd);
+  };
+}
+
+/**
+ * Parses the BLE text stream. `onSample` receives every raw reading (with the mapper's
+ * corrected position and active calibration) for the live view and calibration wizard.
+ */
+export function createJoystickCommandParser(onRawCommand, { calibration = null, onSample } = {}) {
+  const mapper = createJoystickMapper({ calibration });
+  const onCommand = createClickCombiner(onRawCommand);
   let buf = "";
 
-  return function push(chunk) {
+  function emitLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    const sample = parseJoystickLine(trimmed);
+    if (sample) {
+      const { commands, corrected } = mapper.map(sample.x, sample.y, sample.btn);
+      onSample?.({ ...sample, corrected, calibration: mapper.getCalibration() });
+      commands.forEach(onCommand);
+      return;
+    }
+
+    const token = trimmed.toUpperCase();
+    if (token === "SELECT" || token === "HOLD" || TOKEN_TO_QUADRANT[token]) onCommand(token);
+  }
+
+  function push(chunk) {
     const raw = String(chunk || "");
     if (!raw) return;
     buf += raw;
@@ -133,39 +253,23 @@ export function createJoystickCommandParser(onCommand) {
 
     let newline = buf.indexOf("\n");
     while (newline !== -1) {
-      const line = buf.slice(0, newline);
+      emitLine(buf.slice(0, newline));
       buf = buf.slice(newline + 1);
-      emitLine(line, mapSample, onCommand);
       newline = buf.indexOf("\n");
     }
 
     if (buf.length > 64) {
-      emitLine(buf, mapSample, onCommand);
+      emitLine(buf);
       buf = "";
       return;
     }
 
     const pending = buf.trim().toUpperCase();
     if (pending === "SELECT" || pending === "HOLD" || TOKEN_TO_QUADRANT[pending]) {
-      emitLine(buf, mapSample, onCommand);
+      emitLine(buf);
       buf = "";
     }
-  };
-}
-
-function emitLine(line, mapSample, onCommand) {
-  const trimmed = line.trim();
-  if (!trimmed) return;
-
-  const sample = parseJoystickLine(trimmed);
-  if (sample) {
-    const commands = mapSample(sample.x, sample.y, sample.btn);
-    if (commands) commands.forEach(onCommand);
-    return;
   }
 
-  const token = trimmed.toUpperCase();
-  if (token === "SELECT" || token === "HOLD" || TOKEN_TO_QUADRANT[token]) {
-    onCommand(token);
-  }
+  return { push, setCalibration: mapper.setCalibration };
 }

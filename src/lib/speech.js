@@ -16,17 +16,37 @@ export function createListener({ onFinal, onInterim, onError }) {
     recognition = new Ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
+    recognition.maxAlternatives = 5;
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
       let interim = "";
       let finalText = "";
+      let alternatives = [];
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const piece = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += piece;
-        else interim += piece;
+        const result = event.results[i];
+        const top = result[0]?.transcript || "";
+        if (result.isFinal) {
+          finalText += top;
+          alternatives = [];
+          for (let a = 0; a < result.length; a += 1) {
+            const text = String(result[a].transcript || "").trim();
+            if (!text) continue;
+            alternatives.push({
+              text,
+              confidence: Number.isFinite(result[a].confidence) ? result[a].confidence : 0,
+            });
+          }
+        } else {
+          interim += top;
+        }
       }
       if (interim) onInterim?.(interim.trim());
-      if (finalText.trim()) onFinal?.(finalText.trim());
+      if (finalText.trim()) {
+        onFinal?.({
+          text: finalText.trim(),
+          alternatives: alternatives.length ? alternatives : [{ text: finalText.trim(), confidence: 0 }],
+        });
+      }
     };
     recognition.onerror = (event) => {
       if (event.error !== "aborted" && event.error !== "no-speech") {
@@ -94,6 +114,40 @@ export function browserSpeak(text) {
     utter.onerror = resolve;
     window.speechSynthesis.speak(utter);
   });
+}
+
+let currentPreview = null;
+
+/** Speaks a highlighted option. Replaces any preview already playing; `onDone` runs exactly once. */
+export function previewSpeak(text, onDone) {
+  stopPreview();
+  if (!window.speechSynthesis) {
+    onDone?.();
+    return;
+  }
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (currentPreview === finish) currentPreview = null;
+    onDone?.();
+  };
+  currentPreview = finish;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.05;
+  utter.onend = finish;
+  utter.onerror = finish;
+  window.speechSynthesis.speak(utter);
+}
+
+/** Cancel events don't fire reliably in every browser, so the stopped preview is finished here. */
+export function stopPreview() {
+  const finish = currentPreview;
+  if (!finish) return;
+  currentPreview = null;
+  window.speechSynthesis?.cancel();
+  finish();
 }
 
 export async function grokSpeak(text) {

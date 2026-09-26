@@ -24,9 +24,18 @@ function labelStyle(index, count) {
   };
 }
 
-export default function Wheel({ items, selected, onChoose, onHubSelect, onHubHold, busy, speaking, listening }) {
+export default function Wheel({ items, selected, onChoose, onHover, onHubSelect, onHubHold, busy, speaking, listening }) {
   const count = Math.max(items.length, 1);
   const pressAt = useRef(0);
+
+  function hoverProps(index) {
+    if (!onHover) return {};
+    return {
+      onPointerEnter: (event) => {
+        if (event.pointerType === "mouse") onHover(index);
+      },
+    };
+  }
 
   const wheelClass = ["wheel", listening && "is-listening", busy && "is-busy", speaking && "is-speaking"]
     .filter(Boolean)
@@ -56,9 +65,10 @@ export default function Wheel({ items, selected, onChoose, onHubSelect, onHubHol
             key={item.id}
             d={slicePath(i, count)}
             className={`slice slice-${i} ${i === selected ? "on" : ""}`}
+            {...hoverProps(i)}
           />
         ))}
-        <circle cx="50" cy="50" r="14" className="hub-select-bg" />
+        <circle cx="50" cy="50" r="14" className={`hub-select-bg ${selected < 0 ? "on" : ""}`} />
       </svg>
 
       {items.map((item, i) => (
@@ -70,6 +80,7 @@ export default function Wheel({ items, selected, onChoose, onHubSelect, onHubHol
           className={`spoke ${i === selected ? "on" : ""} ${item.kind}`}
           style={labelStyle(i, count)}
           onClick={() => onChoose(i)}
+          {...hoverProps(i)}
         >
           {item.label}
         </button>
@@ -77,7 +88,7 @@ export default function Wheel({ items, selected, onChoose, onHubSelect, onHubHol
 
       <button
         type="button"
-        className="hub-select"
+        className={`hub-select ${selected < 0 ? "on" : ""}`}
         aria-label="Click to speak the highlighted reply. Hold for custom phrases."
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
