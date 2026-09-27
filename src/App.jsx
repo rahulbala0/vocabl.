@@ -581,23 +581,9 @@ export default function App() {
       {/* Slim caregiver header */}
       <header className="top">
         <div className="top-left">
-          <h1>SpeakEasy</h1>
-          <span className="tag">
-            {view === "custom" ? "Custom phrases" : view === "categories" ? "Topics" : `${category} · ${aiSource}`}
-          </span>
+          <h1>vocable</h1>
         </div>
         <div className="caregiver-btns">
-          <button
-            type="button"
-            onClick={connectBle}
-            disabled={!bluetoothSupported() || bleState === "connecting"}
-            title="Connect joystick"
-          >
-            {bleState === "on" ? "🎮 On" : "🎮"}
-          </button>
-          <button type="button" onClick={() => setShowCustomEditor(true)} title="Edit custom phrases">
-            ✏
-          </button>
           <button type="button" onClick={() => setShowSettings(true)} title="Settings">⚙</button>
         </div>
       </header>
@@ -610,35 +596,58 @@ export default function App() {
         {/* Left pane: wheel */}
         <div className="wheel-pane">
           <div className="wheel-stage">
-            <button
-              type="button"
-              className={`mic-toggle${listening ? " is-on" : ""}`}
-              onClick={toggleListen}
-              title="Toggle mic (L)"
-              aria-pressed={listening}
-            >
-              <span className="mic-icon" aria-hidden="true">🎙</span>
-              <span className="mic-label">{listening ? "Mic On" : "Mic Off"}</span>
-              <span className="mic-hint">{listening ? "Listening" : "Click to listen"}</span>
-            </button>
-            <Wheel
-              key={repliesVersion}
-              items={tiles}
-              selected={selected}
-              onChoose={(index) => { setSelected(index); activate(index); }}
-              onHover={settings.readOptions && !settings.scanning ? setSelected : undefined}
-              onHubSelect={() => activate(selectedRef.current)}
-              onHubHold={toggleCustomWheel}
-              busy={busy}
-              speaking={speaking}
-              listening={listening}
-            />
-          </div>
-          <div className="meta">
-            {speaking && <span className="pill live">Speaking</span>}
-            {busy && <span className="pill">Thinking</span>}
-            {settings.scanning && <span className="pill live">Scan</span>}
-            <span className="pill hint-pill">Hold click = custom</span>
+            <div className="side-controls">
+              <button
+                type="button"
+                className={`side-btn mic-toggle${listening ? " is-on" : ""}`}
+                onClick={toggleListen}
+                title="Toggle mic (L)"
+                aria-pressed={listening}
+              >
+                <span className="mic-icon" aria-hidden="true">🎙</span>
+                <span className="mic-label">{listening ? "Mic On" : "Mic Off"}</span>
+                <span className="mic-hint">{listening ? "Listening" : "Click to listen"}</span>
+              </button>
+              <button
+                type="button"
+                className={`side-btn side-btn-sm${bleState === "on" ? " is-live" : ""}`}
+                onClick={connectBle}
+                disabled={!bluetoothSupported() || bleState === "connecting"}
+                title="Connect joystick"
+              >
+                <span className="side-icon" aria-hidden="true">🎮</span>
+                <span className="side-label">{bleState === "on" ? "Controller on" : "Controller"}</span>
+              </button>
+              <button
+                type="button"
+                className="side-btn side-btn-sm"
+                onClick={() => setShowCustomEditor(true)}
+                title="Edit custom phrases"
+              >
+                <span className="side-icon" aria-hidden="true">✏</span>
+                <span className="side-label">Custom</span>
+              </button>
+            </div>
+            <div className="wheel-wrap">
+              <Wheel
+                key={repliesVersion}
+                items={tiles}
+                selected={selected}
+                onChoose={(index) => { setSelected(index); activate(index); }}
+                onHover={settings.readOptions && !settings.scanning ? setSelected : undefined}
+                onHubSelect={() => activate(selectedRef.current)}
+                onHubHold={toggleCustomWheel}
+                busy={busy}
+                speaking={speaking}
+                listening={listening}
+              />
+              <div className="meta">
+                {speaking && <span className="pill live">Speaking</span>}
+                {busy && <span className="pill">Thinking</span>}
+                {settings.scanning && <span className="pill live">Scan</span>}
+                <span className="pill hint-pill">Hold click = custom</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -678,9 +687,6 @@ export default function App() {
                 onClick={() => setView(view === "categories" ? "board" : "categories")}
               >
                 {view === "categories" ? "Replies" : "Topics"}
-              </button>
-              <button type="button" onClick={() => setShowCustomEditor(true)}>
-                Edit custom
               </button>
             </div>
             <p className="status">{status}</p>

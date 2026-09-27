@@ -33,10 +33,27 @@ h1 {
   font-weight: 700;
   letter-spacing: -0.02em;
   white-space: nowrap;
+  text-transform: none;
+  color: #14532d;
+}
+
+/* === Buttons (base) === */
+button {
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  border: 1.5px solid #86efac;
+  background: #ffffff;
+  color: #15803d;
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease,
+    transform 0.1s ease, box-shadow 0.15s ease;
 }
 
 .tag {
-  color: #6b7280;
+  color: #16a34a;
   font-size: 0.82rem;
   white-space: nowrap;
   overflow: hidden;
@@ -49,26 +66,11 @@ h1 {
   flex-shrink: 0;
 }
 
-/* === Buttons (base) === */
-button {
-  font-family: inherit;
-  font-size: 0.88rem;
-  font-weight: 600;
-  border: 1.5px solid #e4e4e4;
-  background: #ffffff;
-  color: #171717;
-  border-radius: 999px;
-  padding: 6px 13px;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease,
-    transform 0.1s ease, box-shadow 0.15s ease;
-}
-
 button:hover:not(:disabled) {
-  background: #f3f4f6;
-  border-color: #d1d5db;
+  background: #f0fdf4;
+  border-color: #4ade80;
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.12);
 }
 
 button:active:not(:disabled) {
@@ -152,48 +154,94 @@ button.live:hover:not(:disabled) {
 }
 
 .wheel-stage {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  justify-content: flex-start;
-  padding-left: 20px;
-  padding-right: 10px;
-  gap: 12px;
+  padding: 8px 16px 8px 10px;
+  gap: 8px;
   min-height: 0;
   width: 100%;
   flex: 1;
 }
 
 .mic-toggle {
-  flex-shrink: 0;
-  width: 148px;
-  height: min(280px, calc(100vh - 220px));
-  min-height: 200px;
-  padding: 20px 14px;
-  border-radius: 36px;
+  flex: 1.35 1 0;
+  min-height: 0;
+  height: auto;
+  width: 112px;
+  padding: 10px 8px;
+  border-radius: 22px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  font-size: 1.05rem;
+  gap: 4px;
+  font-size: 0.92rem;
   line-height: 1.15;
   border-width: 2px;
 }
 
+.side-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 112px;
+  height: min(340px, calc(100vh - 170px));
+  justify-self: start;
+  align-self: center;
+}
+
+.side-btn {
+  width: 112px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 6px;
+  color: #14532d;
+  border-color: #166534;
+}
+
+.side-btn-sm {
+  flex: 0.65 1 0;
+  min-height: 0;
+}
+
+.side-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.side-label {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #14532d;
+}
+
+.side-btn-sm.is-live {
+  background: #bbf7d0;
+  border-color: #14532d;
+  color: #14532d;
+}
+
 .mic-toggle .mic-icon {
-  font-size: 3.2rem;
+  font-size: 2.2rem;
   line-height: 1;
 }
 
 .mic-toggle .mic-label {
-  font-size: 1.35rem;
+  font-size: 1.05rem;
   font-weight: 800;
+  color: inherit;
 }
 
 .mic-toggle .mic-hint {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   font-weight: 600;
-  color: #6b7280;
+  color: #166534;
 }
 
 .mic-toggle.is-on {
@@ -210,18 +258,25 @@ button.live:hover:not(:disabled) {
   transform: translateY(-2px);
 }
 
+.wheel-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  justify-self: center;
+}
+
 /* === Meta pills === */
 .meta {
-  position: absolute;
-  left: 50%;
-  bottom: 6px;
-  transform: translateX(-50%);
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: center;
-  z-index: 1;
-  pointer-events: none;
+  margin-top: 6px;
+  flex-shrink: 0;
 }
 
 .pill {
@@ -253,13 +308,13 @@ button.live:hover:not(:disabled) {
 /* === Wheel === */
 .wheel {
   position: relative;
-  flex: 0 0 auto;
-  height: 100%;
+  flex: 0 1 auto;
+  height: min(100%, calc(100vh - 100px));
   width: auto;
   aspect-ratio: 1 / 1;
-  max-height: min(100%, calc(100vh - 72px));
+  max-height: min(100%, calc(100vh - 100px));
   max-width: 100%;
-  margin-left: auto;
+  margin: 0;
 }
 
 .wheel-svg {
@@ -346,7 +401,8 @@ button.live:hover:not(:disabled) {
   line-height: 1.2;
   text-align: center;
   font-weight: 700;
-  color: #1f2937;
+  color: #111827;
+  text-shadow: none;
   cursor: pointer;
   transition: transform 0.15s ease;
   animation: spokeIn 0.3s ease backwards;
@@ -573,7 +629,7 @@ button.live:hover:not(:disabled) {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.09em;
-  color: #9ca3af;
+  color: #22c55e;
 }
 
 .heard-text {
@@ -581,7 +637,7 @@ button.live:hover:not(:disabled) {
   font-size: clamp(2.1rem, 4.4vw, 3.6rem);
   font-weight: 700;
   line-height: 1.2;
-  color: #111827;
+  color: #15803d;
 }
 
 .muted { color: #9ca3af; font-weight: 400; }
@@ -680,7 +736,7 @@ button.live:hover:not(:disabled) {
 
 .status {
   margin: 0;
-  color: #6b7280;
+  color: #16a34a;
   font-size: 0.8rem;
   min-height: 1em;
 }
@@ -981,16 +1037,33 @@ button.live:hover:not(:disabled) {
     gap: 8px;
   }
 
+  .side-controls {
+    width: 84px;
+    height: auto;
+    gap: 6px;
+  }
+
+  .side-btn,
   .mic-toggle {
-    width: 92px;
-    min-height: 120px;
-    height: 120px;
-    padding: 12px 8px;
-    border-radius: 24px;
+    width: 84px;
+  }
+
+  .mic-toggle {
+    min-height: 110px;
+    height: auto;
+    padding: 10px 6px;
+    border-radius: 20px;
+  }
+
+  .side-btn-sm {
+    min-height: 64px;
+    padding: 8px 6px;
   }
 
   .mic-toggle .mic-icon { font-size: 2rem; }
   .mic-toggle .mic-label { font-size: 0.95rem; }
+  .side-icon { font-size: 1.3rem; }
+  .side-label { font-size: 0.72rem; }
 
   .wheel {
     width: min(calc(92vw - 110px), 380px);
