@@ -629,25 +629,6 @@ export default function App() {
         <div className="wheel-pane">
           <div className="wheel-stage">
             <div className="side-controls">
-              <label className="vol-control">
-                <span className="vol-mark" aria-hidden="true">+</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={Math.round((Number(settings.speakVolume) || 0) * 100)}
-                  onChange={(e) => {
-                    const next = Number(e.target.value) / 100;
-                    setSpeakVolume(next);
-                    persist({ ...settings, speakVolume: next });
-                  }}
-                  aria-label="Speaking volume"
-                  title={`Speaking volume ${Math.round((Number(settings.speakVolume) || 0) * 100)}%`}
-                />
-                <span className="vol-mark" aria-hidden="true">−</span>
-                <span className="vol-label">Volume</span>
-              </label>
               <button
                 type="button"
                 className={`side-btn mic-toggle${listening ? " is-on" : ""}`}
@@ -678,6 +659,27 @@ export default function App() {
                 <span className="side-icon" aria-hidden="true">✏</span>
                 <span className="side-label">Custom</span>
               </button>
+              <label className="vol-control">
+                <span className="vol-label">Volume</span>
+                <span className="vol-row">
+                  <span className="vol-mark" aria-hidden="true">−</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={Math.round((Number(settings.speakVolume) || 0) * 100)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) / 100;
+                      setSpeakVolume(next);
+                      persist({ ...settings, speakVolume: next });
+                    }}
+                    aria-label="Speaking volume"
+                    title={`Speaking volume ${Math.round((Number(settings.speakVolume) || 0) * 100)}%`}
+                  />
+                  <span className="vol-mark" aria-hidden="true">+</span>
+                </span>
+              </label>
             </div>
             <div className="wheel-wrap">
               <Wheel

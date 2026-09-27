@@ -92,7 +92,7 @@ export default function CustomPhrases({ phrases, onChange, onClose, onSpeak }) {
             onChoose={focusSlot}
             onHubSelect={() => speak(active)}
           />
-          <p className="hint">Click a slice to edit it · click Speak to hear it</p>
+          <p className="hint">Click a slice to edit it · click Speak to speak it</p>
         </section>
 
         <section className="custom-editor">
@@ -132,7 +132,7 @@ export default function CustomPhrases({ phrases, onChange, onClose, onSpeak }) {
                       onClick={(e) => { e.stopPropagation(); speak(i); }}
                       disabled={!phrase.trim()}
                     >
-                      🔊 Hear
+                      🔊 Speak
                     </button>
                     <button
                       type="button"

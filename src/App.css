@@ -195,31 +195,46 @@ button.live:hover:not(:disabled) {
 
 .vol-control {
   flex: 0 0 auto;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 112px;
-  padding: 8px 0 6px;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  max-width: 112px;
+  padding: 6px 6px 7px;
   border: 1.5px solid #166534;
-  border-radius: 20px;
+  border-radius: 16px;
   background: #f0fdf4;
   color: #14532d;
+  overflow: hidden;
+}
+
+.vol-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  width: 100%;
 }
 
 .vol-control input[type="range"] {
-  appearance: slider-vertical;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 28px;
-  height: 84px;
+  appearance: auto;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 18px;
   margin: 0;
   accent-color: #166534;
   cursor: pointer;
 }
 
 .vol-mark {
-  font-size: 0.95rem;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
   font-weight: 800;
   line-height: 1;
 }
@@ -228,6 +243,7 @@ button.live:hover:not(:disabled) {
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.02em;
+  text-align: center;
 }
 
 .side-btn {
@@ -240,7 +256,8 @@ button.live:hover:not(:disabled) {
   gap: 2px;
   padding: 8px 6px;
   color: #14532d;
-  border-color: #166534;
+  border: 2px solid #166534;
+  background: #ffffff;
 }
 
 .side-btn-sm {
@@ -1206,12 +1223,13 @@ button.live:hover:not(:disabled) {
   }
 
   .vol-control {
-    width: 84px;
-    padding: 6px 0 4px;
+    width: 100%;
+    max-width: 84px;
+    padding: 4px 4px 5px;
   }
 
   .vol-control input[type="range"] {
-    height: 64px;
+    height: 16px;
   }
 
   .side-btn,
