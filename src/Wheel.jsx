@@ -3,7 +3,7 @@ import { useRef } from "react";
 const ANGLE_OFFSET = (-3 * Math.PI) / 4;
 const HOLD_MS = 700;
 
-function slicePath(index, count, cx = 50, cy = 50, r = 48) {
+function slicePath(index, count, cx = 50, cy = 50, r = 46.5) {
   const a0 = (index / count) * 2 * Math.PI + ANGLE_OFFSET;
   const a1 = ((index + 1) / count) * 2 * Math.PI + ANGLE_OFFSET;
   const x0 = cx + r * Math.cos(a0);
@@ -37,7 +37,13 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
     };
   }
 
-  const wheelClass = ["wheel", listening && "is-listening", busy && "is-busy", speaking && "is-speaking"]
+  const wheelClass = [
+    "wheel",
+    listening && "is-listening",
+    busy && "is-busy",
+    speaking && "is-speaking",
+    selected >= 0 && "has-selection",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -58,16 +64,25 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
   }
 
   return (
-    <div className={wheelClass} role="listbox" aria-label="Reply wheel">
-      <svg viewBox="0 0 100 100" className="wheel-svg" aria-hidden="true">
+    <div className={wheelClass} role="listbox" aria-label="Reply wheel" aria-busy={Boolean(busy)}>
+      <svg viewBox="-3 -3 106 106" className="wheel-svg" aria-hidden="true">
         {items.map((item, i) => (
-          <path
-            key={item.id}
-            d={slicePath(i, count)}
-            className={`slice slice-${i} ${i === selected ? "on" : ""}`}
-            {...hoverProps(i)}
-          />
+          i === selected ? null : (
+            <path
+              key={item.id}
+              d={slicePath(i, count)}
+              className={`slice slice-${i}`}
+              {...hoverProps(i)}
+            />
+          )
         ))}
+        {selected >= 0 && items[selected] && (
+          <path
+            d={slicePath(selected, count, 50, 50, 48.6)}
+            className={`slice slice-${selected} on`}
+            {...hoverProps(selected)}
+          />
+        )}
         <circle cx="50" cy="50" r="14" className={`hub-select-bg ${selected < 0 ? "on" : ""}`} />
       </svg>
 
@@ -79,6 +94,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
           aria-selected={i === selected}
           className={`spoke ${i === selected ? "on" : ""} ${item.kind}`}
           style={labelStyle(i, count)}
+          disabled={busy}
           onClick={() => onChoose(i)}
           {...hoverProps(i)}
         >
@@ -89,14 +105,15 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
       <button
         type="button"
         className={`hub-select ${selected < 0 ? "on" : ""}`}
-        aria-label="Click to speak the highlighted reply. Hold for custom phrases."
+        aria-label={busy ? "Thinking of replies" : "Click to speak the highlighted reply. Hold for custom phrases."}
+        disabled={busy}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
           pressAt.current = 0;
         }}
       >
-        OK
+        {busy ? "Thinking…" : speaking ? "Speaking…" : "Speak"}
       </button>
     </div>
   );

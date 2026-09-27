@@ -40,15 +40,22 @@ export default function App() {
   const [lastSpoken, setLastSpoken] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [bleState, setBleState] = useState("off");
-  const [status, setStatus] = useState("Click center or Enter to speak · hold for custom phrases");
+  const [status, setStatusText] = useState("Click center or Enter to speak · hold for custom phrases");
+  const [statusWarn, setStatusWarn] = useState(false);
+  const setStatus = (message, warn = false) => {
+    setStatusText(message);
+    setStatusWarn(Boolean(warn));
+  };
   const [busy, setBusy] = useState(false);
   const [category, setCategory] = useState("Chat");
   const [typedHeard, setTypedHeard] = useState("");
   const [repliesVersion, setRepliesVersion] = useState(0);
   const [showCustomEditor, setShowCustomEditor] = useState(false);
   const [heardConfidence, setHeardConfidence] = useState(1);
+  const [turns, setTurns] = useState([]);
 
   const historyRef = useRef([]);
+  const chatLogRef = useRef(null);
   const listenerRef = useRef(null);
   const bleRef = useRef(null);
   const settingsRef = useRef(settings);
@@ -89,6 +96,12 @@ export default function App() {
   const persist = (next) => { setSettings(next); saveSettings(next); };
   const gridRef = useRef(null);
   const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    const log = chatLogRef.current;
+    if (!log) return;
+    log.scrollTop = log.scrollHeight;
+  }, [turns]);
 
   const replyPanePx = Math.max(220, Number(settings.replyPanePx) || 320);
 
@@ -136,6 +149,12 @@ export default function App() {
     ].filter(Boolean).join(" ");
   }
 
+  function appendTurn(role, text) {
+    const line = `${role === "other" ? "Other" : "Me"}: ${text}`;
+    historyRef.current = [...historyRef.current, line].slice(-8);
+    setTurns((prev) => [...prev, { id: `${Date.now()}-${prev.length}`, role, text }].slice(-8));
+  }
+
   function rememberFacts(incoming) {
     if (!incoming?.length) return;
     const next = mergeFacts(settingsRef.current.facts, incoming);
@@ -147,6 +166,7 @@ export default function App() {
     if (endingRef.current || history.length < 2) return;
     endingRef.current = true;
     historyRef.current = [];
+    setTurns([]);
     lastActivityRef.current = Date.now();
     try {
       const s = settingsRef.current;
@@ -346,7 +366,7 @@ export default function App() {
     logTiming("speech recognition", recognizeMsRef.current, confLabel);
     setHeard(text);
     setInterim("");
-    historyRef.current = [...historyRef.current, `Other: ${text}`].slice(-8);
+    appendTurn("other", text);
     requestReplies(text);
   }, [requestReplies]);
   const onHeardRef = useRef(onHeard);
@@ -449,7 +469,7 @@ export default function App() {
       }
       if (tile.kind === "speak") {
         lastActivityRef.current = Date.now();
-        historyRef.current = [...historyRef.current, `Me: ${tile.label}`].slice(-8);
+        appendTurn("me", tile.label);
         await speakText(tile.label);
         setSelected((current) => (current === index ? -1 : current));
       }
@@ -474,7 +494,7 @@ export default function App() {
     (cmd) => {
       if (cmd === "DISCONNECTED") {
         setBleState("off");
-        setStatus("Joystick disconnected");
+        setStatus("Joystick disconnected", true);
         bleRef.current = null;
         return;
       }
@@ -561,7 +581,14 @@ export default function App() {
       setStatus("Joystick connected");
     } catch (err) {
       setBleState("off");
-      setStatus(String(err.message || err));
+      const raw = String(err?.message || err || "");
+      const cancelled = err?.name === "NotFoundError" || /cancell?ed/i.test(raw);
+      setStatus(
+        cancelled
+          ? "Joystick not connected. Click Controller to try again."
+          : raw || "Joystick not connected. Click Controller to try again.",
+        true
+      );
     }
   }
 
@@ -646,6 +673,7 @@ export default function App() {
                 {busy && <span className="pill">Thinking</span>}
                 {settings.scanning && <span className="pill live">Scan</span>}
                 <span className="pill hint-pill">Hold click = custom</span>
+                <span className="pill hint-pill">Double-click = new replies</span>
               </div>
             </div>
           </div>
@@ -672,6 +700,21 @@ export default function App() {
             )}
           </div>
 
+          <section className="chat-log" aria-label="Conversation">
+            <p className="heard-label">Conversation</p>
+            <ol className="chat-turns" ref={chatLogRef}>
+              {turns.length === 0 && (
+                <li className="chat-empty">What they say and what you reply will show up here.</li>
+              )}
+              {turns.map((turn) => (
+                <li key={turn.id} className={`chat-turn is-${turn.role}`}>
+                  <span className="chat-who">{turn.role === "other" ? "They" : "You"}</span>
+                  <p className="chat-text">{turn.text}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+
           <div className="reply-footer">
             <div className="footer-actions">
               <button
@@ -689,7 +732,7 @@ export default function App() {
                 {view === "categories" ? "Replies" : "Topics"}
               </button>
             </div>
-            <p className="status">{status}</p>
+            <p className={`status${statusWarn ? " is-warn" : ""}`}>{status}</p>
             <form
               className="heard-form"
               onSubmit={(e) => {
@@ -804,4 +847,4 @@ export default function App() {
       )}
     </div>
   );
-}
+} 
