@@ -613,7 +613,7 @@ export default function App() {
       {/* Slim caregiver header */}
       <header className="top">
         <div className="top-left">
-          <h1>vocable</h1>
+          <h1>vocabl.</h1>
         </div>
         <div className="caregiver-btns">
           <button type="button" onClick={() => setShowSettings(true)} title="Settings">⚙</button>
