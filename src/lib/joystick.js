@@ -37,12 +37,14 @@ export function parseJoystickLine(text) {
   const line = String(text || "").trim();
   if (!line) return null;
   const parts = line.split(",");
-  if (parts.length !== 3) return null;
+  if (parts.length < 3 || parts.length > 5) return null;
   const x = Number(parts[0]);
   const y = Number(parts[1]);
-  const btn = Number(parts[2]);
-  if (![x, y, btn].every(Number.isFinite)) return null;
-  return { x, y, btn: btn ? 1 : 0 };
+  const sw = Number(parts.length === 5 ? parts[2] : 0);
+  const btn = Number(parts.length === 5 ? parts[3] : parts[2]);
+  const alt = Number(parts.length >= 4 ? parts[parts.length === 5 ? 4 : 3] : 0);
+  if (![x, y, sw, btn, alt].every(Number.isFinite)) return null;
+  return { x, y, sw: sw ? 1 : 0, btn: btn ? 1 : 0, alt: alt ? 1 : 0 };
 }
 
 /**
@@ -227,6 +229,9 @@ export function createClickCombiner(onCommand, windowMs = DOUBLE_CLICK_MS) {
 export function createJoystickCommandParser(onRawCommand, { calibration = null, onSample } = {}) {
   const mapper = createJoystickMapper({ calibration });
   const onCommand = createClickCombiner(onRawCommand);
+  let lastSw = 0;
+  let lastBtn = 0;
+  let lastAlt = 0;
   let buf = "";
 
   function emitLine(line) {
@@ -235,14 +240,19 @@ export function createJoystickCommandParser(onRawCommand, { calibration = null, 
 
     const sample = parseJoystickLine(trimmed);
     if (sample) {
-      const { commands, corrected } = mapper.map(sample.x, sample.y, sample.btn);
+      const { commands, corrected } = mapper.map(sample.x, sample.y, 0);
       onSample?.({ ...sample, corrected, calibration: mapper.getCalibration() });
       commands.forEach(onCommand);
+      if ((sample.sw && !lastSw) || (sample.btn && !lastBtn)) onRawCommand("SELECT");
+      if (sample.alt && !lastAlt) onRawCommand("MIC");
+      lastSw = sample.sw;
+      lastBtn = sample.btn;
+      lastAlt = sample.alt;
       return;
     }
 
     const token = trimmed.toUpperCase();
-    if (token === "SELECT" || token === "HOLD" || TOKEN_TO_QUADRANT[token]) onCommand(token);
+    if (token === "SELECT" || token === "HOLD" || token === "MIC" || TOKEN_TO_QUADRANT[token]) onCommand(token);
   }
 
   function push(chunk) {
@@ -265,7 +275,7 @@ export function createJoystickCommandParser(onRawCommand, { calibration = null, 
     }
 
     const pending = buf.trim().toUpperCase();
-    if (pending === "SELECT" || pending === "HOLD" || TOKEN_TO_QUADRANT[pending]) {
+    if (pending === "SELECT" || pending === "HOLD" || pending === "MIC" || TOKEN_TO_QUADRANT[pending]) {
       emitLine(buf);
       buf = "";
     }

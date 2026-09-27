@@ -1,15 +1,15 @@
 // Analog joystick over BLE Nordic UART so Chrome Web Bluetooth can read it.
-// Notify lines: "x,y,btn\n" (ADC 0-4095, btn 0 or 1).
+// Notify lines: "x,y,sw,btn,alt\n" (ADC 0-4095, buttons 0 or 1, pressed = 1).
 //
 // Wiring:
-//   Joystick VRx -> GPIO34
-//   Joystick VRy -> GPIO35
-//   Joystick SW  -> GPIO32 (INPUT_PULLUP, pressed = LOW)
+//   Joystick VRx -> GPIO14
+//   Joystick VRy -> GPIO12
+//   Joystick SW  -> GPIO13 (INPUT_PULLUP, pressed = LOW)  // Select hovered reply
+//   Button A     -> GPIO33 (INPUT_PULLUP, pressed = LOW)  // Select hovered reply
+//   Button B     -> GPIO25 (INPUT_PULLUP, pressed = LOW)  // Mute / unmute mic
 //   Joystick VCC -> 3.3V, GND -> GND
+//   Buttons      -> pin and GND (idle = HIGH)
 //   Status LED   -> GPIO2 (blinks when the tablet writes SELECT)
-//
-// With VCC on 3.3V and 11 dB attenuation the stick rests around 1900-2100. A resting value
-// near 2900 usually means VCC is on 5V, so one side clips at 4095 long before full travel.
 
 #include <Arduino.h>
 #include <BLEDevice.h>
@@ -22,9 +22,11 @@ static const char *SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *CHAR_WRITE_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *CHAR_NOTIFY_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
-static const int PIN_JOY_X = 34;
-static const int PIN_JOY_Y = 35;
-static const int PIN_JOY_SW = 32;
+static const int PIN_JOY_X = 14;
+static const int PIN_JOY_Y = 12;
+static const int PIN_JOY_SW = 13;
+static const int PIN_BTN_A = 33;
+static const int PIN_BTN_B = 25;
 static const int PIN_LED = 2;
 
 static const unsigned long SEND_INTERVAL_MS = 30;
@@ -66,10 +68,11 @@ void setup()
 {
     Serial.begin(115200);
     pinMode(PIN_JOY_SW, INPUT_PULLUP);
+    pinMode(PIN_BTN_A, INPUT_PULLUP);
+    pinMode(PIN_BTN_B, INPUT_PULLUP);
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
     analogReadResolution(12);
-    // 11 dB lets GPIO34/35 read the full 0-3.3V swing instead of saturating early.
     analogSetPinAttenuation(PIN_JOY_X, ADC_11db);
     analogSetPinAttenuation(PIN_JOY_Y, ADC_11db);
 
@@ -132,17 +135,19 @@ void loop()
 
     int x = analogRead(PIN_JOY_X);
     int y = analogRead(PIN_JOY_Y);
-    int btn = digitalRead(PIN_JOY_SW) == LOW ? 1 : 0;
+    int sw = digitalRead(PIN_JOY_SW) == LOW ? 1 : 0;
+    int btn = digitalRead(PIN_BTN_A) == LOW ? 1 : 0;
+    int alt = digitalRead(PIN_BTN_B) == LOW ? 1 : 0;
 
-    Serial.printf("x=%d y=%d btn=%d\n", x, y, btn);
+    Serial.printf("x=%d y=%d sw=%d btn=%d alt=%d\n", x, y, sw, btn, alt);
 
     if (!deviceConnected || notifyChar == nullptr)
     {
         return;
     }
 
-    char line[24];
-    int n = snprintf(line, sizeof(line), "%d,%d,%d\n", x, y, btn);
+    char line[40];
+    int n = snprintf(line, sizeof(line), "%d,%d,%d,%d,%d\n", x, y, sw, btn, alt);
     if (n > 0)
     {
         notifyChar->setValue((uint8_t *)line, (size_t)n);

@@ -49,7 +49,7 @@ Without keys the app still works using offline reply heuristics (`src/lib/offlin
 - `lib/ai.js` — calls `/api/suggest`, falls back to `offlineSuggest()` on any error
 - `lib/offline.js` — keyword heuristics for AI-free reply generation and category guessing
 - `lib/speech.js` — wraps Web Speech API (`SpeechRecognition`) for mic input; `browserSpeak()`/`grokSpeak()` for TTS output; mic is paused while speaking to prevent self-transcription. `previewSpeak()`/`stopPreview()` read the highlighted option aloud when the "Read options aloud" setting (`readOptions`) is on; `App.jsx` uses a hold counter (`holdMic`/`releaseMic`) so the mic stays paused across overlapping previews and replies. `createVoiceCache()` prefetches cloud TTS for the current replies and keeps custom-phrase clips. Voice settings match AI provider: `race` / `openai` / `grok`, plus `browser`. `[timing]` logs cover recognition, `/api/suggest`, and `/api/speak` in the browser console and the Express terminal
-- `lib/ble.js` — Web Bluetooth connection to the ESP32 (`SpeakEasy` device); receives raw `x,y,btn` lines (or legacy `UP/DOWN/LEFT/RIGHT/SELECT` tokens), sends `SELECT` to blink LED on activation
+- `lib/ble.js` — Web Bluetooth connection to the ESP32 (`SpeakEasy` device); receives `x,y,sw,btn,alt` (or older `x,y,btn[,alt]`) lines. Joystick SW and button A select the hovered reply; button B toggles the mic.
 - `lib/calibration.js` — pure geometry: `correct()` turns a raw reading into a corrected position (center → per-direction axis scaling → 16-sector outline correction → mirror/rotation), plus builders used by the wizard
 - `lib/joystick.js` — `createDirectionDetector()` picks a direction per movement (steady hold, or peak of a flick; ignores the opposite direction for 150 ms after the stick returns), the click combiner, and the BLE stream parser
 - `CalibrationWizard.jsx` / `JoystickSettings.jsx` / `JoystickView.jsx` — guided calibration (center, range, orientation, test) saved to `settings.joystickCalibration`, and the live raw/corrected stick diagram. Without a saved calibration the resting position is measured on each connect
@@ -72,7 +72,7 @@ Board tiles cycle with arrow keys or BLE joystick commands. `scanning` mode (for
 Joystick click gestures: a single click is `SELECT` (sent ~400 ms after release, once the double-click window passes), two clicks within 400 ms is `DOUBLE` (fetch 4 new replies that differ from the ones shown; `R` does the same on the keyboard), and holding 700 ms is `HOLD` (custom-phrase wheel).
 
 ### Firmware
-`firmware/speakeasy_esp32.ino` — Arduino sketch for the ESP32. BLE service UUID `6e400001-...` (Nordic UART profile). Notify characteristic sends direction strings; write characteristic receives `SELECT` to blink GPIO 2.
+`firmware/src/main.cpp` — ESP32 BLE Nordic UART. Notify lines are `x,y,sw,btn,alt`. Joystick VRx GPIO14, VRy GPIO12, SW GPIO13 (select, pull-up). Extra buttons GPIO33 (select, pull-up) and GPIO25 (mic toggle, pull-up). Write `SELECT` blinks GPIO 2.
 
 ## Browser constraints
 - Web Bluetooth and Web Speech API require **Chrome** (desktop, not iOS)

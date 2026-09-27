@@ -503,6 +503,10 @@ export default function App() {
         bleRef.current = null;
         return;
       }
+      if (cmd === "MIC") {
+        toggleListen();
+        return;
+      }
       if (showSettings || showCustomEditor) return;
       if (cmd === "HOLD") {
         toggleCustomWheel();
@@ -521,7 +525,7 @@ export default function App() {
       if (index == null) return;
       setSelected(index);
     },
-    [activate, refreshReplies, showSettings, showCustomEditor, toggleCustomWheel]
+    [activate, refreshReplies, showSettings, showCustomEditor, toggleCustomWheel, toggleListen]
   );
   commandRef.current = onCommand;
 
