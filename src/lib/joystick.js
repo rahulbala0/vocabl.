@@ -229,7 +229,6 @@ export function createClickCombiner(onCommand, windowMs = DOUBLE_CLICK_MS) {
 export function createJoystickCommandParser(onRawCommand, { calibration = null, onSample } = {}) {
   const mapper = createJoystickMapper({ calibration });
   const onCommand = createClickCombiner(onRawCommand);
-  let lastSw = 0;
   let lastBtn = 0;
   let lastAlt = 0;
   let buf = "";
@@ -240,12 +239,11 @@ export function createJoystickCommandParser(onRawCommand, { calibration = null, 
 
     const sample = parseJoystickLine(trimmed);
     if (sample) {
-      const { commands, corrected } = mapper.map(sample.x, sample.y, 0);
+      const { commands, corrected } = mapper.map(sample.x, sample.y, sample.sw);
       onSample?.({ ...sample, corrected, calibration: mapper.getCalibration() });
       commands.forEach(onCommand);
-      if ((sample.sw && !lastSw) || (sample.btn && !lastBtn)) onRawCommand("SELECT");
+      if (sample.btn && !lastBtn) onRawCommand("SELECT");
       if (sample.alt && !lastAlt) onRawCommand("MIC");
-      lastSw = sample.sw;
       lastBtn = sample.btn;
       lastAlt = sample.alt;
       return;

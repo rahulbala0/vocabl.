@@ -193,8 +193,54 @@ app.get("/api/health", (_req, res) => {
     openaiModel: envKey("OPENAI_MODEL") || "gpt-4o-mini",
     grokVoice: envKey("XAI_TTS_VOICE") || "eve",
     openaiVoice: envKey("OPENAI_TTS_VOICE") || "nova",
+    transcribe: Boolean(envKey("OPENAI_API_KEY")),
   });
 });
+
+app.post(
+  "/api/transcribe",
+  express.raw({
+    limit: "8mb",
+    type: (req) => /^audio\//.test(String(req.headers["content-type"] || "")),
+  }),
+  async (req, res) => {
+    loadEnv();
+    const apiKey = envKey("OPENAI_API_KEY");
+    if (!apiKey) {
+      res.status(503).json({ error: "No OpenAI key for transcription" });
+      return;
+    }
+    const audio = req.body;
+    if (!audio || !audio.length) {
+      res.status(400).json({ error: "Missing audio" });
+      return;
+    }
+    const type = String(req.headers["content-type"] || "audio/webm").split(";")[0];
+    const ext = type.includes("mp4") ? "mp4" : "webm";
+    const form = new FormData();
+    form.append("file", new Blob([audio], { type }), `speech.${ext}`);
+    form.append("model", "whisper-1");
+    form.append("language", "en");
+    const t0 = Date.now();
+    try {
+      const upstream = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      });
+      const data = await upstream.json().catch(() => ({}));
+      if (!upstream.ok) {
+        res.status(502).json({ error: data.error?.message || `whisper ${upstream.status}` });
+        return;
+      }
+      const text = String(data.text || "").trim();
+      console.log(`[timing] transcribe: ${Date.now() - t0}ms · ${text.slice(0, 60)}`);
+      res.json({ text });
+    } catch (err) {
+      res.status(502).json({ error: String(err.message || err) });
+    }
+  }
+);
 
 app.post("/api/suggest", async (req, res) => {
   loadEnv();

@@ -1,17 +1,25 @@
 export function speechRecognitionSupported() {
-  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+  return Boolean(
+    window.SpeechRecognition
+    || window.webkitSpeechRecognition
+    || navigator.mediaDevices?.getUserMedia
+  );
 }
 
-export function createListener({ onFinal, onInterim, onError }) {
+function recorderMime() {
+  const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+}
+
+function createBrowserSpeech({ onFinal, onInterim, onError, onHardFail }) {
   const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Ctor) {
-    return { start() {}, stop() {}, pause() {}, resume() {} };
-  }
+  if (!Ctor) return null;
 
   let recognition = null;
   let wanted = false;
   let paused = false;
   let lastInterimAt = 0;
+  let failed = false;
 
   const attach = () => {
     recognition = new Ctor();
@@ -43,17 +51,25 @@ export function createListener({ onFinal, onInterim, onError }) {
       }
     };
     recognition.onerror = (event) => {
-      if (event.error !== "aborted" && event.error !== "no-speech") {
-        onError?.(event.error);
+      if (event.error === "aborted" || event.error === "no-speech") return;
+      if (event.error === "network" || event.error === "service-not-allowed") {
+        failed = true;
+        wanted = false;
+        onHardFail?.(event.error);
+        return;
       }
+      onError?.(event.error);
     };
     recognition.onend = () => {
-      if (wanted && !paused) {
-        try {
-          recognition.start();
-        } catch {
-          /* Chrome throws if start() is too soon */
-        }
+      if (!wanted || paused || failed) return;
+      try {
+        recognition.start();
+      } catch {
+        setTimeout(() => {
+          if (wanted && !paused && !failed) {
+            try { recognition.start(); } catch { /* ignore */ }
+          }
+        }, 80);
       }
     };
   };
@@ -64,37 +80,232 @@ export function createListener({ onFinal, onInterim, onError }) {
     start() {
       wanted = true;
       paused = false;
+      if (failed) {
+        failed = false;
+        attach();
+      }
       try {
         recognition.start();
       } catch {
-        /* already started */
+        setTimeout(() => {
+          if (wanted && !paused && !failed) {
+            try { recognition.start(); } catch { /* ignore */ }
+          }
+        }, 80);
       }
     },
     stop() {
       wanted = false;
       paused = false;
-      try {
-        recognition.stop();
-      } catch {
-        /* ignore */
-      }
+      try { recognition.stop(); } catch { /* ignore */ }
     },
     pause() {
       paused = true;
-      try {
-        recognition.stop();
-      } catch {
-        /* ignore */
+      try { recognition.stop(); } catch { /* ignore */ }
+    },
+    resume() {
+      if (!wanted || failed) return;
+      paused = false;
+      try { recognition.start(); } catch { /* ignore */ }
+    },
+  };
+}
+
+function createCloudSpeech({ onFinal, onInterim, onError }) {
+  const mime = recorderMime();
+  let stream = null;
+  let audioCtx = null;
+  let analyser = null;
+  let timer = null;
+  let wanted = false;
+  let paused = false;
+  let recorder = null;
+  let chunks = [];
+  let speaking = false;
+  let voicedMs = 0;
+  let silentMs = 0;
+  let startedAt = 0;
+
+  const rms = () => {
+    if (!analyser) return 0;
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (const sample of data) {
+      const n = (sample - 128) / 128;
+      sum += n * n;
+    }
+    return Math.sqrt(sum / data.length);
+  };
+
+  const discard = () => {
+    if (!recorder) return;
+    try { if (recorder.state !== "inactive") recorder.stop(); } catch { /* ignore */ }
+    recorder = null;
+    chunks = [];
+    speaking = false;
+  };
+
+  const finish = () => {
+    if (!recorder) return;
+    const rec = recorder;
+    const parts = chunks;
+    const began = startedAt;
+    recorder = null;
+    chunks = [];
+    speaking = false;
+    const send = async () => {
+      const blob = new Blob(parts, { type: rec.mimeType || mime || "audio/webm" });
+      if (blob.size < 2500) {
+        onInterim?.("");
+        return;
       }
+      try {
+        const res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": blob.type || "audio/webm" },
+          body: blob,
+        });
+        const data = await res.json().catch(() => ({}));
+        const text = String(data.text || "").trim();
+        if (!text) {
+          if (!res.ok) onError?.(data.error || "transcribe failed");
+          return;
+        }
+        onFinal?.({
+          text,
+          confidence: 1,
+          recognizeMs: began ? Date.now() - began : 0,
+        });
+      } catch (err) {
+        onError?.(err?.message || "transcribe failed");
+      }
+    };
+    rec.addEventListener("stop", () => { void send(); }, { once: true });
+    try { rec.stop(); } catch { void send(); }
+  };
+
+  const begin = () => {
+    if (!stream || !mime || speaking) return;
+    chunks = [];
+    startedAt = Date.now();
+    recorder = new MediaRecorder(stream, { mimeType: mime });
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) chunks.push(event.data);
+    };
+    recorder.start(250);
+    speaking = true;
+    onInterim?.("…");
+  };
+
+  const tick = () => {
+    if (!wanted || paused) return;
+    const level = rms();
+    if (level >= 0.045) {
+      voicedMs += 50;
+      silentMs = 0;
+      if (!speaking && voicedMs >= 180) begin();
+    } else {
+      voicedMs = 0;
+      if (speaking) {
+        silentMs += 50;
+        if (silentMs >= 800) finish();
+      }
+    }
+  };
+
+  const shutdown = () => {
+    clearInterval(timer);
+    timer = null;
+    discard();
+    analyser = null;
+    if (audioCtx) {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
+    }
+    stream?.getTracks().forEach((track) => track.stop());
+    stream = null;
+  };
+
+  return {
+    async start() {
+      wanted = true;
+      paused = false;
+      if (!mime || !navigator.mediaDevices?.getUserMedia) {
+        onError?.("mic unavailable");
+        return;
+      }
+      try {
+        if (!stream) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true },
+          });
+          audioCtx = new AudioContext();
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 512;
+          audioCtx.createMediaStreamSource(stream).connect(analyser);
+          if (audioCtx.state === "suspended") await audioCtx.resume();
+        }
+        if (!timer) timer = setInterval(tick, 50);
+      } catch (err) {
+        wanted = false;
+        onError?.(err?.name === "NotAllowedError" ? "not-allowed" : err?.message || "mic");
+      }
+    },
+    stop() {
+      wanted = false;
+      paused = false;
+      shutdown();
+    },
+    pause() {
+      paused = true;
+      discard();
     },
     resume() {
       if (!wanted) return;
       paused = false;
-      try {
-        recognition.start();
-      } catch {
-        /* ignore */
-      }
+    },
+  };
+}
+
+export function createListener({ onFinal, onInterim, onError }) {
+  const browser = createBrowserSpeech({
+    onFinal,
+    onInterim,
+    onError,
+    onHardFail: () => {
+      mode = "cloud";
+      browser?.stop();
+      if (wanted) cloud.start();
+    },
+  });
+  const cloud = createCloudSpeech({ onFinal, onInterim, onError });
+  let mode = browser ? "browser" : "cloud";
+  let wanted = false;
+  let paused = false;
+
+  const active = () => (mode === "browser" && browser ? browser : cloud);
+
+  return {
+    start() {
+      wanted = true;
+      paused = false;
+      active().start();
+    },
+    stop() {
+      wanted = false;
+      paused = false;
+      browser?.stop();
+      cloud.stop();
+    },
+    pause() {
+      paused = true;
+      active().pause();
+    },
+    resume() {
+      if (!wanted) return;
+      paused = false;
+      active().resume();
     },
   };
 }

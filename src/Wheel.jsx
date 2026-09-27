@@ -1,8 +1,14 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { ENGAGE_FRAC } from "./lib/joystick";
 
 const ANGLE_OFFSET = (-3 * Math.PI) / 4;
 const HOLD_MS = 700;
 const LABEL_MIN_PX = 13;
+const WHEEL_CX = 50;
+const WHEEL_CY = 50;
+const WHEEL_R = 46.5;
+const STICK_DOT_R = 1.7;
+const STICK_DEADZONE = ENGAGE_FRAC;
 
 function slicePath(index, count, cx = 50, cy = 50, r = 46.5) {
   const a0 = (index / count) * 2 * Math.PI + ANGLE_OFFSET;
@@ -24,6 +30,25 @@ function labelStyle(index, count) {
   };
 }
 
+function clampLength(x, y, max) {
+  const len = Math.hypot(x, y);
+  return len > max ? [(x / len) * max, (y / len) * max] : [x, y];
+}
+
+function stickDotPoint(corrected) {
+  const max = WHEEL_R - STICK_DOT_R;
+  if (!corrected) return [WHEEL_CX, WHEEL_CY];
+  const mag = Number.isFinite(corrected.mag)
+    ? corrected.mag
+    : Math.hypot(corrected.ux, corrected.uy);
+  if (mag < STICK_DEADZONE) return [WHEEL_CX, WHEEL_CY];
+  const t = Math.min(1, (mag - STICK_DEADZONE) / (1 - STICK_DEADZONE));
+  const ux = (corrected.ux / mag) * t;
+  const uy = (corrected.uy / mag) * t;
+  const [dx, dy] = clampLength(ux * WHEEL_R, -uy * WHEEL_R, max);
+  return [WHEEL_CX + dx, WHEEL_CY + dy];
+}
+
 function fitSpokeLabels(root) {
   if (!root) return;
   root.querySelectorAll(".spoke-text").forEach((el) => {
@@ -41,10 +66,11 @@ function fitSpokeLabels(root) {
   });
 }
 
-export default function Wheel({ items, selected, onChoose, onHover, onHubSelect, onHubHold, busy, speaking, listening }) {
+export default function Wheel({ items, selected, onChoose, onHover, onHubSelect, onHubHold, busy, speaking, listening, connected, subscribeSamples }) {
   const count = Math.max(items.length, 1);
   const pressAt = useRef(0);
   const rootRef = useRef(null);
+  const stickRef = useRef(null);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -55,6 +81,27 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
     observer.observe(root);
     return () => observer.disconnect();
   }, [items, selected, busy]);
+
+  useEffect(() => {
+    const dot = stickRef.current;
+    if (!dot) return undefined;
+    const place = (el, corrected) => {
+      const [x, y] = stickDotPoint(corrected);
+      el.style.left = `${((x + 3) / 106) * 100}%`;
+      el.style.top = `${((y + 3) / 106) * 100}%`;
+    };
+    if (!connected || !subscribeSamples) {
+      dot.hidden = true;
+      return undefined;
+    }
+    dot.hidden = false;
+    place(dot, null);
+    return subscribeSamples((sample) => {
+      const next = stickRef.current;
+      if (!next) return;
+      place(next, sample.corrected);
+    });
+  }, [connected, subscribeSamples]);
 
   function hoverProps(index) {
     if (!onHover) return {};
@@ -143,6 +190,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
       >
         {busy ? "Thinking" : ""}
       </button>
+      <div ref={stickRef} className="wheel-stick" hidden aria-hidden="true" />
     </div>
   );
 }

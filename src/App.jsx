@@ -24,6 +24,7 @@ import Wheel from "./Wheel.jsx";
 import "./App.css";
 
 const STARTER = ["I'm listening.", "Give me a second.", "Tell me more.", "Go ahead."];
+const IDLE_HINT = "Click center or Enter to speak · hold for custom phrases";
 // Keeps the mic off briefly after speech ends so it doesn't catch the tail of the audio.
 const MIC_RESUME_DELAY_MS = 300;
 
@@ -41,7 +42,7 @@ export default function App() {
   const [lastSpoken, setLastSpoken] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [bleState, setBleState] = useState("off");
-  const [status, setStatusText] = useState("Click center or Enter to speak · hold for custom phrases");
+  const [status, setStatusText] = useState(IDLE_HINT);
   const [statusWarn, setStatusWarn] = useState(false);
   const setStatus = (message, warn = false) => {
     setStatusText(message);
@@ -306,7 +307,7 @@ export default function App() {
     if (result.source === "offline") {
       setStatus(result.error ? `AI failed, using offline · ${result.error}` : "Offline replies");
     } else {
-      setStatus(`From ${result.source} · ${result.category || "Chat"}`);
+      setStatus(IDLE_HINT);
     }
   }, []);
 
@@ -353,7 +354,7 @@ export default function App() {
     setAiSource(result.source);
     setSelected(-1);
     setRepliesVersion((v) => v + 1);
-    setStatus(`New replies from ${result.source}`);
+    setStatus(IDLE_HINT);
   }, []);
 
   const onHeard = useCallback((payload) => {
@@ -387,6 +388,7 @@ export default function App() {
       onError: (err) => setStatus(`Mic: ${err}`),
     });
     listenerRef.current = listener;
+    if (listening) listener.start();
     return () => listener.stop();
   }, []);
 
@@ -646,10 +648,11 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className={`side-btn side-btn-sm${bleState === "on" ? " is-live" : ""}`}
+                className={`side-btn side-btn-sm${bleState === "on" ? " is-on" : ""}`}
                 onClick={connectBle}
                 disabled={!bluetoothSupported() || bleState === "connecting"}
                 title="Connect joystick"
+                aria-pressed={bleState === "on"}
               >
                 <span className="side-icon" aria-hidden="true">🎮</span>
                 <span className="side-label">{bleState === "on" ? "Controller on" : "Controller"}</span>
@@ -697,6 +700,8 @@ export default function App() {
                 busy={busy}
                 speaking={speaking}
                 listening={listening}
+                connected={bleState === "on"}
+                subscribeSamples={subscribeSamples}
               />
               <div className="meta">
                 {speaking && <span className="pill live">Speaking</span>}

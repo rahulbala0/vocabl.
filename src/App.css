@@ -306,10 +306,16 @@ button.live:hover:not(:disabled) {
   color: #3730a3;
 }
 
-.side-btn-sm.is-live {
-  background: linear-gradient(180deg, #eef2ff 0%, #ede9fe 100%);
-  border-color: #818cf8;
-  color: #3730a3;
+.side-btn.is-on,
+.mic-toggle.is-on {
+  background: linear-gradient(180deg, #312e81 0%, #4c1d95 100%);
+  color: #fda4af;
+  border-color: #312e81;
+}
+
+.side-btn.is-on .side-label,
+.side-btn.is-on .mic-label {
+  color: inherit;
 }
 
 .mic-toggle .mic-icon {
@@ -327,12 +333,6 @@ button.live:hover:not(:disabled) {
   font-size: 0.68rem;
   font-weight: 600;
   color: #64748b;
-}
-
-.mic-toggle.is-on {
-  background: linear-gradient(180deg, #312e81 0%, #4c1d95 100%);
-  color: #fda4af;
-  border-color: #312e81;
 }
 
 .mic-toggle.is-on .mic-hint {
@@ -450,6 +450,21 @@ button.live:hover:not(:disabled) {
 .slice-1.on   { fill: #4f46e5; }
 .slice-2.on   { fill: #7c3aed; }
 .slice-3.on   { fill: #e11d48; }
+
+.wheel-stick {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3.2%;
+  height: 3.2%;
+  border-radius: 50%;
+  background: #94a3b8;
+  border: 1.5px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(30, 27, 75, 0.28);
+  pointer-events: none;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+}
 
 .hub-select-bg { stroke: #e0e7ff; stroke-width: 1.1; }
 .hub-select-bg.idle { fill: #ffffff; }
@@ -603,8 +618,7 @@ button.live:hover:not(:disabled) {
   background: transparent;
 }
 
-.side-btn:hover:not(:disabled) .side-label,
-.side-btn-sm.is-live:hover .side-label {
+.side-btn:hover:not(:disabled) .side-label {
   color: inherit;
 }
 
