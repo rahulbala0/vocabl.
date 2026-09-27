@@ -32,7 +32,7 @@ function memoryFields(body) {
   };
 }
 
-export async function fetchSuggestions({ profile, heard, history, provider, customPrompt, ...memory }) {
+export async function fetchSuggestions({ profile, heard, history, provider, customPrompt, recognizeMs, ...memory }) {
   try {
     return await requestSuggestions({
       profile,
@@ -40,6 +40,7 @@ export async function fetchSuggestions({ profile, heard, history, provider, cust
       history: (history || []).slice(-6),
       provider,
       customPrompt,
+      recognizeMs,
       ...memoryFields(memory),
     });
   } catch (err) {
@@ -64,6 +65,7 @@ export async function fetchNewSuggestions({
   facts,
   summaries,
   lowConfidence,
+  recognizeMs,
 }) {
   const seen = new Set(avoid.map(replyKey));
   const fresh = [];
@@ -89,6 +91,7 @@ export async function fetchNewSuggestions({
       provider,
       customPrompt,
       avoid,
+      recognizeMs,
       ...memoryFields({ facts, summaries, lowConfidence }),
     });
     suggestMs = result.ms;

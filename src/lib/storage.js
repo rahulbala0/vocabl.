@@ -4,7 +4,7 @@ export const DEFAULT_SETTINGS = {
   profile:
     "My name is Alex. I like music, basketball, and strong coffee. I live with my sister Maya and my dog Bean. I get tired in the afternoon.",
   provider: "race",
-  voice: "grok",
+  voice: "openai",
   scanning: false,
   scanMs: 1100,
   readOptions: false,

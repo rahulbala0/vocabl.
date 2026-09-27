@@ -12,6 +12,7 @@ import {
   previewSpeak,
   speechRecognitionSupported,
   stopPreview,
+  usesCloudVoice,
 } from "./lib/speech";
 import { loadSettings, saveSettings } from "./lib/storage";
 import CalibrationWizard from "./CalibrationWizard.jsx";
@@ -126,6 +127,15 @@ export default function App() {
     };
   }
 
+  function askAgainBackground() {
+    const s = settingsRef.current;
+    return [
+      s.profile,
+      ...(s.facts || []),
+      ...(s.summaries || []).map((row) => row.text),
+    ].filter(Boolean).join(" ");
+  }
+
   function rememberFacts(incoming) {
     if (!incoming?.length) return;
     const next = mergeFacts(settingsRef.current.facts, incoming);
@@ -192,7 +202,7 @@ export default function App() {
     setLastSpoken(text);
     setStatus(`Speaking: ${text}`);
     try {
-      if (settingsRef.current.voice === "grok") {
+      if (usesCloudVoice(settingsRef.current.voice)) {
         try { await voiceCacheRef.current.play(text); } catch { await browserSpeak(text); }
       } else {
         await browserSpeak(text);
@@ -207,19 +217,26 @@ export default function App() {
 
   useEffect(() => {
     const cache = voiceCacheRef.current;
-    if (settings.voice !== "grok") {
-      cache.clearReplies();
+    cache.setProvider(settings.voice);
+    cache.clearReplies();
+    if (!usesCloudVoice(settings.voice)) {
       cache.clearCustom();
       return undefined;
     }
-    cache.clearReplies();
     cache.prefetch(suggestions);
     return undefined;
   }, [suggestions, settings.voice]);
 
+  const voicePrefetchRef = useRef(settings.voice);
   useEffect(() => {
-    if (settings.voice !== "grok") return undefined;
-    voiceCacheRef.current.prefetchCustom(settings.custom || []);
+    const cache = voiceCacheRef.current;
+    cache.setProvider(settings.voice);
+    if (voicePrefetchRef.current !== settings.voice) {
+      cache.clearCustom();
+      voicePrefetchRef.current = settings.voice;
+    }
+    if (!usesCloudVoice(settings.voice)) return undefined;
+    cache.prefetchCustom(settings.custom || []);
     return undefined;
   }, [settings.custom, settings.voice]);
 
@@ -248,13 +265,13 @@ export default function App() {
       history: historyRef.current,
       provider: settingsRef.current.provider,
       customPrompt: settingsRef.current.customPrompt,
+      recognizeMs: recognizeMsRef.current,
       ...ctx,
     });
     if (requestId !== requestIdRef.current) return;
-    logTiming("speech recognition (after talk stopped)", recognizeMsRef.current);
     logTiming("suggest", result.ms || 0, `via ${result.source}`);
     rememberFacts(result.facts);
-    setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
+    setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence, text, askAgainBackground()));
     setCategory(result.category || "Chat");
     setAiSource(result.source);
     setSelected(-1);
@@ -288,6 +305,7 @@ export default function App() {
       provider: settingsRef.current.provider,
       customPrompt: settingsRef.current.customPrompt,
       avoid,
+      recognizeMs: recognizeMsRef.current,
       ...ctx,
     });
     if (requestId !== requestIdRef.current) return;
@@ -300,7 +318,12 @@ export default function App() {
     logTiming("suggest", result.ms || 0, `via ${result.source}`);
     rememberFacts(result.facts);
     rejectedRef.current = avoid;
-    setSuggestions(applyAskAgain(result.replies, ctx.lowConfidence));
+    setSuggestions(applyAskAgain(
+      result.replies,
+      ctx.lowConfidence,
+      heardRef.current,
+      askAgainBackground()
+    ));
     setCategory(result.category || "Chat");
     setAiSource(result.source);
     setSelected(-1);
@@ -316,6 +339,11 @@ export default function App() {
     lastActivityRef.current = Date.now();
     heardConfidenceRef.current = Number.isFinite(confidence) ? confidence : 0;
     setHeardConfidence(heardConfidenceRef.current);
+    const conf = heardConfidenceRef.current;
+    const confLabel = !Number.isFinite(conf) || conf === 0
+      ? "confidence unknown"
+      : `confidence ${Math.round(conf * 100)}%`;
+    logTiming("speech recognition", recognizeMsRef.current, confLabel);
     setHeard(text);
     setInterim("");
     historyRef.current = [...historyRef.current, `Other: ${text}`].slice(-8);
@@ -723,7 +751,9 @@ export default function App() {
               Voice
               <select value={settings.voice}
                 onChange={(e) => persist({ ...settings, voice: e.target.value })}>
-                <option value="grok">Grok Voice (fallback: browser)</option>
+                <option value="race">Both at once (faster, costs more)</option>
+                <option value="openai">One at a time: ChatGPT, then Grok</option>
+                <option value="grok">One at a time: Grok, then ChatGPT</option>
                 <option value="browser">Browser speechSynthesis</option>
               </select>
             </label>

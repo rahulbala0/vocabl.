@@ -42,7 +42,7 @@ export function offlineReplies(heard) {
     return ["Yes, I need help.", "I'm okay for now.", "Please stay with me.", "Can you call someone?"];
   }
 
-  return ["Yes, that works.", "No, not that.", "Can you say that again?", "Let me think about that."];
+  return ["Yes, that works.", "No, not that.", "I'm not sure.", "Let me think about that."];
 }
 
 export function offlineSuggest(heard) {

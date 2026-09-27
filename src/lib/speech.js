@@ -145,7 +145,13 @@ export function stopPreview() {
 }
 
 export function logTiming(stage, ms, extra = "") {
-  console.log(`[timing] ${stage}: ${Math.round(ms)}ms${extra ? ` · ${extra}` : ""}`);
+  const rounded = Math.round(ms);
+  console.log(`[timing] ${stage}: ${rounded}ms${extra ? ` · ${extra}` : ""}`);
+  fetch("/api/timing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage, ms: rounded, extra }),
+  }).catch(() => {});
 }
 
 function speakSignal(signal, ms = 20000) {
@@ -155,17 +161,140 @@ function speakSignal(signal, ms = 20000) {
   return typeof AbortSignal.any === "function" ? AbortSignal.any([signal, timeout]) : signal;
 }
 
-async function fetchSpeakUrl(text, signal) {
+export function usesCloudVoice(voice) {
+  return voice === "grok" || voice === "openai" || voice === "race" || voice === "both";
+}
+
+let speakProvider = "openai";
+
+async function fetchSpeakUrl(text, signal, provider) {
   const t0 = performance.now();
   const res = await fetch("/api/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, provider }),
     signal: speakSignal(signal),
   });
-  if (!res.ok) throw new Error("Grok Voice unavailable");
+  if (!res.ok) throw new Error("Voice unavailable");
   const blob = await res.blob();
   return { url: URL.createObjectURL(blob), ms: performance.now() - t0 };
+}
+
+function appendBuffer(sourceBuffer, chunk) {
+  return new Promise((resolve, reject) => {
+    const onEnd = () => {
+      sourceBuffer.removeEventListener("updateend", onEnd);
+      sourceBuffer.removeEventListener("error", onErr);
+      resolve();
+    };
+    const onErr = () => {
+      sourceBuffer.removeEventListener("updateend", onEnd);
+      sourceBuffer.removeEventListener("error", onErr);
+      reject(new Error("Could not append audio"));
+    };
+    sourceBuffer.addEventListener("updateend", onEnd);
+    sourceBuffer.addEventListener("error", onErr);
+    sourceBuffer.appendBuffer(chunk);
+  });
+}
+
+/** Plays /api/speak as it arrives, then returns a blob URL for the finished clip. */
+async function streamAndPlay(text, signal) {
+  try {
+    return await streamAndPlayInner(text, signal);
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+    const { url, ms } = await fetchSpeakUrl(text, signal, speakProvider);
+    logTiming("speak", ms, "on demand");
+    await playUrl(url);
+    return { url, ms };
+  }
+}
+
+async function streamAndPlayInner(text, signal) {
+  const t0 = performance.now();
+  const res = await fetch("/api/speak?stream=1", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, provider: speakProvider }),
+    signal: speakSignal(signal),
+  });
+  if (!res.ok || !res.body) throw new Error("Voice unavailable");
+
+  const chunks = [];
+  const reader = res.body.getReader();
+  let firstMs = 0;
+
+  const canStream = Boolean(window.MediaSource && MediaSource.isTypeSupported("audio/mpeg"));
+  if (!canStream) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value?.byteLength) chunks.push(value);
+    }
+    const blob = new Blob(chunks, { type: "audio/mpeg" });
+    const url = URL.createObjectURL(blob);
+    logTiming("speak", performance.now() - t0, "on demand");
+    await playUrl(url);
+    return { url, ms: performance.now() - t0 };
+  }
+
+  const mediaSource = new MediaSource();
+  const objectUrl = URL.createObjectURL(mediaSource);
+  const audio = new Audio(objectUrl);
+
+  await new Promise((resolve, reject) => {
+    const fail = (err) => {
+      audio.onended = null;
+      audio.onerror = null;
+      reject(err);
+    };
+    mediaSource.addEventListener("sourceopen", async () => {
+      try {
+        const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+        audio.onended = resolve;
+        audio.onerror = () => fail(new Error("audio play failed"));
+        const playOnce = () => {
+          audio.play().catch(() => {});
+        };
+        playOnce();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value?.byteLength) continue;
+          chunks.push(value);
+          if (!firstMs) {
+            firstMs = performance.now() - t0;
+            logTiming("speak", firstMs, "stream first audio");
+            playOnce();
+          }
+          await appendBuffer(sourceBuffer, value);
+        }
+        if (mediaSource.readyState === "open") mediaSource.endOfStream();
+        playOnce();
+        if (audio.ended) {
+          resolve();
+          return;
+        }
+        const leftover = Number.isFinite(audio.duration)
+          ? Math.max(400, (audio.duration - audio.currentTime) * 1000 + 400)
+          : 15000;
+        const timer = setTimeout(() => resolve(), leftover);
+        const prevEnded = audio.onended;
+        audio.onended = () => {
+          clearTimeout(timer);
+          prevEnded?.();
+        };
+      } catch (err) {
+        fail(err);
+      }
+    }, { once: true });
+  });
+
+  URL.revokeObjectURL(objectUrl);
+  const blob = new Blob(chunks, { type: "audio/mpeg" });
+  return { url: URL.createObjectURL(blob), ms: firstMs || performance.now() - t0 };
 }
 
 function createTtsQueue(limit = 2) {
@@ -229,13 +358,8 @@ function playUrl(url) {
 export async function grokSpeak(text, signal) {
   const t0 = performance.now();
   try {
-    const { url, ms } = await fetchSpeakUrl(text, signal);
-    logTiming("speak", ms, "on demand");
-    try {
-      await playUrl(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    const { url } = await streamAndPlay(text, signal);
+    URL.revokeObjectURL(url);
   } catch (err) {
     logTiming("speak", performance.now() - t0, err?.name === "AbortError" ? "cancelled or timed out" : "failed");
     throw err;
@@ -243,7 +367,7 @@ export async function grokSpeak(text, signal) {
 }
 
 /**
- * Prefetches Grok TTS. Reply clips are dropped when the next set arrives; custom-phrase
+ * Prefetches cloud TTS. Reply clips are dropped when the next set arrives; custom-phrase
  * clips stay until the phrase list or voice setting changes.
  */
 export function createVoiceCache() {
@@ -266,7 +390,7 @@ export function createVoiceCache() {
         err.name = "AbortError";
         throw err;
       }
-      return fetchSpeakUrl(text, controller.signal);
+      return fetchSpeakUrl(text, controller.signal, speakProvider);
     }, urgent);
     entry.promote = queued.promote;
     entry.promise = queued.promise
@@ -276,7 +400,7 @@ export function createVoiceCache() {
         return result.url;
       })
       .catch((err) => {
-        cache.delete(text);
+        if (!entry.keep) cache.delete(text);
         throw err;
       });
     cache.set(text, entry);
@@ -292,6 +416,9 @@ export function createVoiceCache() {
   }
 
   return {
+    setProvider(next) {
+      speakProvider = next || "openai";
+    },
     prefetch(texts) {
       for (const text of texts) begin(replies, String(text || "").trim());
     },
@@ -313,22 +440,34 @@ export function createVoiceCache() {
       drop(custom);
     },
     async play(text) {
-      const entry = replies.get(text) || custom.get(text);
-      if (!entry) {
-        await grokSpeak(text);
+      const cache = replies.has(text) ? replies : custom.has(text) ? custom : replies;
+      const entry = cache.get(text);
+      if (entry?.url) {
+        logTiming("speak", entry.ms ?? 0, "prefetched");
+        await playUrl(entry.url);
         return;
       }
-      entry.promote?.();
-      const already = Boolean(entry.url);
+
+      if (entry) {
+        entry.keep = true;
+        entry.controller.abort();
+      }
+
       const t0 = performance.now();
       try {
-        const url = entry.url || (await entry.promise);
-        logTiming("speak", entry.ms ?? 0, already ? "prefetched" : "waited for prefetch");
-        await playUrl(url);
+        const result = await streamAndPlay(text);
+        const next = cache.get(text) || entry || { promise: null, url: null, ms: null, controller: new AbortController(), promote: null };
+        if (next.url && next.url !== result.url) URL.revokeObjectURL(next.url);
+        next.url = result.url;
+        next.ms = result.ms;
+        next.promise = Promise.resolve(result.url);
+        next.keep = true;
+        cache.set(text, next);
       } catch (err) {
+        if (entry && !entry.url) cache.delete(text);
         logTiming(
           "speak",
-          entry.ms ?? performance.now() - t0,
+          performance.now() - t0,
           err?.name === "AbortError" ? "cancelled or timed out" : "failed"
         );
         throw err;

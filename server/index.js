@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
+import WebSocket from "ws";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(rootDir, ".env");
@@ -27,16 +28,24 @@ const PORT = Number(process.env.PORT || 8787);
 const XAI_URL = "https://api.x.ai/v1/chat/completions";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const XAI_TTS_URL = "https://api.x.ai/v1/tts";
+const XAI_TTS_WS = "wss://api.x.ai/v1/tts";
+const OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech";
+const TTS_FORMAT = { codec: "mp3", sample_rate: 24000, bit_rate: 64000 };
 
 const CATEGORIES = ["Food", "Feelings", "People", "Help", "Chat"];
 
 const SYSTEM_PROMPT = `Write 4 short first-person AAC replies for a nonverbal person.
 JSON only: {"category":"Food"|"Feelings"|"People"|"Help"|"Chat","replies":["...","...","...","..."],"facts":[]}
 category: Food meals/drink, Feelings mood/pain, People family/staff, Help bathroom/emergency/stop, else Chat.
-replies: under 10 words, four different intents — accept, decline, ask or specific, clarify or shift.
-Transcripts can be wrong; use history and facts to infer meaning.
-If confidence is low, one reply must be exactly: Can you say that again?
-facts: only new lasting "label: value" details, else [].`;
+Every reply must directly answer the latest "They said" line. Under 10 words. Most relevant first.
+Question: 2-3 plausible answers plus one uncertainty line ("I don't know", "I'm not sure", or "I think …?").
+Profile, facts, and earlier talks are background only. Use them only when they directly answer this question. Never raise an unrelated memory topic.
+Only include exactly "Can you say that again?" when told confidence is low, as the least relevant of the four. Otherwise never use that phrase.
+facts: only new lasting "label: value" details, else [].
+Examples:
+They said "What's the most populated city?" → ["Tokyo","New York","I think Tokyo?","I don't know"]
+They said "Are you hungry?" → ["Yes","No","A little","Maybe later"]
+They said "How was your day?" → ["Good","Not great","Tiring","I'll tell you later"]`;
 
 function cleanReplies(parsed) {
   if (!Array.isArray(parsed)) return null;
@@ -64,24 +73,36 @@ function extractPayload(text) {
     try {
       const parsed = JSON.parse(text.slice(objStart, objEnd + 1));
       const replies = cleanReplies(parsed?.replies);
-      const category = normalizeCategory(parsed.category);
-      if (replies && category) {
+      if (replies) {
         const facts = (Array.isArray(parsed.facts) ? parsed.facts : [])
           .map((line) => String(line).trim().slice(0, 160))
           .filter(Boolean)
           .slice(0, 8);
-        return { replies, category, facts };
+        return { replies, category: normalizeCategory(parsed.category), facts };
       }
     } catch {
-      return null;
+      /* try array form below */
     }
   }
 
-  return null;
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end <= start) return null;
+  try {
+    const replies = cleanReplies(JSON.parse(text.slice(start, end + 1)));
+    if (!replies) return null;
+    return { replies, category: "", facts: [] };
+  } catch {
+    return null;
+  }
 }
 
 function providerName(url) {
   return String(url || "").includes("x.ai") ? "grok" : "openai";
+}
+
+function logTiming(stage, ms, extra = "") {
+  console.log(`[timing] ${stage}: ${Math.round(ms)}ms${extra ? ` · ${extra}` : ""}`);
 }
 
 async function chatComplete({ url, apiKey, model, messages, extra = {}, signal, json = true }) {
@@ -89,7 +110,7 @@ async function chatComplete({ url, apiKey, model, messages, extra = {}, signal, 
     model,
     messages,
     temperature: 0.8,
-    max_tokens: 1000,
+    max_tokens: 400,
     ...extra,
   };
   if (json) body.response_format = { type: "json_object" };
@@ -110,15 +131,15 @@ async function chatComplete({ url, apiKey, model, messages, extra = {}, signal, 
   return data?.choices?.[0]?.message?.content || "";
 }
 
-async function suggestFromProvider(provider, messages, signal) {
+async function suggestFromProvider(provider, messages, signal, retry = true) {
   try {
     return await chatComplete({ ...provider, messages, signal });
   } catch (firstErr) {
-    if (signal?.aborted) throw firstErr;
+    if (signal?.aborted || !retry) throw firstErr;
     return chatComplete({
       ...provider,
       messages,
-      extra: { max_tokens: 1000 },
+      extra: { max_tokens: 400 },
       json: false,
       signal,
     });
@@ -170,6 +191,8 @@ app.get("/api/health", (_req, res) => {
     openai: Boolean(envKey("OPENAI_API_KEY")),
     grokModel: envKey("XAI_MODEL") || "grok-4.6",
     openaiModel: envKey("OPENAI_MODEL") || "gpt-4o-mini",
+    grokVoice: envKey("XAI_TTS_VOICE") || "eve",
+    openaiVoice: envKey("OPENAI_TTS_VOICE") || "nova",
   });
 });
 
@@ -197,7 +220,6 @@ app.post("/api/suggest", async (req, res) => {
   const lowConfidence = Boolean(req.body?.lowConfidence);
   const preferred = String(req.body?.provider || "race");
   const customPrompt = String(req.body?.customPrompt || "").slice(0, 2000);
-
   const userContent = [
     profile.trim() ? `Profile:\n${profile}` : "",
     customPrompt.trim() ? `Caregiver notes:\n${customPrompt}` : "",
@@ -205,7 +227,10 @@ app.post("/api/suggest", async (req, res) => {
     summaries.length ? `Earlier:\n${summaries.map((line) => `- ${line}`).join("\n")}` : "",
     history.length ? `Just now:\n${history.join("\n")}` : "",
     heard.trim() ? `They said:\n"${heard}"` : "They have not spoken yet. Offer openers.",
-    lowConfidence ? "Low confidence. One reply must be: Can you say that again?" : "",
+    "Answer only that last line. Background (profile/facts/earlier) must not introduce a new topic.",
+    lowConfidence
+      ? "Low confidence. Replace the least relevant reply with exactly: Can you say that again?"
+      : "Do not include: Can you say that again?",
     avoid.length ? `Do not repeat:\n${avoid.map((line) => `- ${line}`).join("\n")}` : "",
   ]
     .filter(Boolean)
@@ -220,7 +245,7 @@ app.post("/api/suggest", async (req, res) => {
     url: XAI_URL,
     apiKey: envKey("XAI_API_KEY"),
     model: envKey("XAI_MODEL") || "grok-4.6",
-    extra: { reasoning_effort: "low" },
+    extra: {},
   };
   const openai = {
     url: OPENAI_URL,
@@ -232,6 +257,8 @@ app.post("/api/suggest", async (req, res) => {
   const keyed = [grok, openai].filter((p) => p.apiKey);
   const sequential = preferred === "openai" ? [openai, grok].filter((p) => p.apiKey) : [grok, openai].filter((p) => p.apiKey);
   const race = preferred === "race" || preferred === "both";
+  const recognizeMs = Number(req.body?.recognizeMs);
+  const suggestStarted = Date.now();
 
   try {
     let chosen;
@@ -239,7 +266,7 @@ app.post("/api/suggest", async (req, res) => {
       const controllers = keyed.map(() => new AbortController());
       chosen = await raceValid(
         keyed.map((provider, i) =>
-          suggestFromProvider(provider, messages, controllers[i].signal).then((content) => {
+          suggestFromProvider(provider, messages, controllers[i].signal, false).then((content) => {
             const payload = extractPayload(content);
             if (!payload) return null;
             controllers.forEach((c, j) => { if (j !== i) c.abort(); });
@@ -265,7 +292,11 @@ app.post("/api/suggest", async (req, res) => {
       if (!chosen) throw new Error(errors.join(" | ") || "No API keys configured in .env");
     }
 
-    console.log(`suggest ok via ${chosen.source}${race && keyed.length > 1 ? " (race)" : ""}`);
+    const suggestMs = Date.now() - suggestStarted;
+    if (Number.isFinite(recognizeMs) && recognizeMs >= 0) {
+      logTiming("speech recognition (after talk stopped)", recognizeMs);
+    }
+    logTiming("suggest", suggestMs, `via ${chosen.source}${race && keyed.length > 1 ? " (race)" : ""}`);
     return res.json({
       replies: chosen.payload.replies,
       category: chosen.payload.category,
@@ -363,61 +394,342 @@ app.post("/api/summarize", async (req, res) => {
   });
 });
 
+function streamTtsWebsocket({ text, apiKey, voice, signal, onChunk }) {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams({
+      language: "en",
+      voice,
+      codec: "mp3",
+      optimize_streaming_latency: "1",
+    });
+    const ws = new WebSocket(`${XAI_TTS_WS}?${params}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    let settled = false;
+    let gotAudio = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      try { ws.close(); } catch { /* already closed */ }
+      if (err) reject(err);
+      else resolve();
+    };
+    const onAbort = () => {
+      finish(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ type: "text.delta", delta: text }));
+      ws.send(JSON.stringify({ type: "text.done" }));
+    });
+    ws.on("message", (data) => {
+      let event;
+      try {
+        event = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (event.type === "audio.delta" && event.delta) {
+        try {
+          gotAudio = true;
+          onChunk(Buffer.from(event.delta, "base64"));
+        } catch (err) {
+          finish(err);
+        }
+      } else if (event.type === "audio.done") {
+        finish();
+      } else if (event.type === "error") {
+        finish(new Error(event.message || "TTS stream error"));
+      }
+    });
+    ws.on("error", (err) => {
+      console.error("TTS websocket error:", err.message || err);
+      finish(err);
+    });
+    ws.on("unexpected-response", (_req, res) => {
+      finish(new Error(`TTS websocket ${res.statusCode}`));
+    });
+    ws.on("close", () => {
+      if (!settled) finish(gotAudio ? undefined : new Error("TTS stream closed early"));
+    });
+  });
+}
+
+function normalizeVoiceProvider(raw) {
+  const value = String(raw || "").toLowerCase();
+  if (value === "both") return "race";
+  if (value === "openai" || value === "grok" || value === "race") return value;
+  return "openai";
+}
+
+function abortError() {
+  return Object.assign(new Error("aborted"), { name: "AbortError" });
+}
+
+function raceAbort(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function openaiTtsBuffer({ text, apiKey, voice, model, signal }) {
+  const upstream = await raceAbort(fetch(OPENAI_TTS_URL, {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: "mp3",
+    }),
+  }), signal);
+  if (!upstream.ok) {
+    const detail = await upstream.text();
+    throw new Error(`openai ${upstream.status} ${detail.slice(0, 200)}`);
+  }
+  return Buffer.from(await raceAbort(upstream.arrayBuffer(), signal));
+}
+
+async function grokTtsBuffer({ text, apiKey, voice, signal }) {
+  const upstream = await raceAbort(fetch(XAI_TTS_URL, {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text,
+      voice_id: voice,
+      language: "en",
+      output_format: TTS_FORMAT,
+    }),
+  }), signal);
+  if (!upstream.ok) {
+    const detail = await upstream.text();
+    throw new Error(`grok ${upstream.status} ${detail.slice(0, 200)}`);
+  }
+  return Buffer.from(await raceAbort(upstream.arrayBuffer(), signal));
+}
+
+function ttsJobs(text, signal) {
+  const grokKey = envKey("XAI_API_KEY");
+  const openaiKey = envKey("OPENAI_API_KEY");
+  const grokVoice = envKey("XAI_TTS_VOICE") || "eve";
+  const openaiVoice = envKey("OPENAI_TTS_VOICE") || "nova";
+  const openaiModel = envKey("OPENAI_TTS_MODEL") || "tts-1";
+  const jobs = [];
+  if (openaiKey) {
+    jobs.push({
+      name: "openai",
+      run: (jobSignal) => openaiTtsBuffer({
+        text,
+        apiKey: openaiKey,
+        voice: openaiVoice,
+        model: openaiModel,
+        signal: jobSignal || signal,
+      }),
+    });
+  }
+  if (grokKey) {
+    jobs.push({
+      name: "grok",
+      run: (jobSignal) => grokTtsBuffer({
+        text,
+        apiKey: grokKey,
+        voice: grokVoice,
+        signal: jobSignal || signal,
+      }),
+    });
+  }
+  return jobs;
+}
+
+function orderedTtsJobs(provider, jobs) {
+  if (provider === "grok") {
+    return [...jobs].sort((a, b) => (a.name === "grok" ? -1 : b.name === "grok" ? 1 : 0));
+  }
+  if (provider === "openai") {
+    return [...jobs].sort((a, b) => (a.name === "openai" ? -1 : b.name === "openai" ? 1 : 0));
+  }
+  return jobs;
+}
+
+function raceTts(jobs, parentSignal) {
+  return new Promise((resolve, reject) => {
+    const controllers = jobs.map(() => new AbortController());
+    const errors = [];
+    let pending = jobs.length;
+    let settled = false;
+    const abortChildren = () => controllers.forEach((c) => c.abort());
+    if (!pending) {
+      reject(new Error("No TTS keys configured in .env"));
+      return;
+    }
+    if (parentSignal?.aborted) {
+      abortChildren();
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      return;
+    }
+    parentSignal?.addEventListener("abort", abortChildren, { once: true });
+    jobs.forEach((job, i) => {
+      job.run(controllers[i].signal)
+        .then((buf) => {
+          if (settled) return;
+          settled = true;
+          controllers.forEach((c, j) => { if (j !== i) c.abort(); });
+          parentSignal?.removeEventListener("abort", abortChildren);
+          resolve({ buf, provider: job.name });
+        })
+        .catch((err) => {
+          if (settled) return;
+          if (err?.name !== "AbortError") errors.push(String(err.message || err));
+          pending -= 1;
+          if (!pending) {
+            parentSignal?.removeEventListener("abort", abortChildren);
+            reject(new Error(errors.join(" | ") || "aborted"));
+          }
+        });
+    });
+  });
+}
+
+async function speakBuffer({ text, provider, signal }) {
+  const jobs = orderedTtsJobs(provider, ttsJobs(text, signal));
+  if (!jobs.length) throw new Error("No TTS keys configured in .env");
+  if (provider === "race" && jobs.length > 1) {
+    return raceTts(jobs, signal);
+  }
+  const errors = [];
+  for (const job of jobs) {
+    try {
+      const buf = await job.run(signal);
+      return { buf, provider: job.name };
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
+      errors.push(String(err.message || err));
+    }
+  }
+  throw new Error(errors.join(" | "));
+}
+
 app.post("/api/speak", async (req, res) => {
   loadEnv();
   const text = String(req.body?.text || "").slice(0, 400);
   if (!text) return res.status(400).json({ error: "text required" });
-  const apiKey = envKey("XAI_API_KEY");
-  if (!apiKey) {
-    return res.status(501).json({ error: "Grok Voice not configured" });
+  const provider = normalizeVoiceProvider(req.body?.provider);
+  const jobs = ttsJobs(text);
+  if (!jobs.length) {
+    return res.status(501).json({ error: "Voice not configured" });
   }
 
+  const speakStarted = Date.now();
+  console.log(`[speak] start ${provider} · ${text.slice(0, 40)}`);
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, 25000);
-  req.on("close", () => controller.abort());
+  res.on("close", () => {
+    if (!res.writableEnded) controller.abort();
+  });
+
+  const grokKey = envKey("XAI_API_KEY");
+  const grokVoice = envKey("XAI_TTS_VOICE") || "eve";
+  const wantStream = String(req.query.stream || "") === "1";
 
   try {
-    const upstream = await fetch(XAI_TTS_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text,
-        voice_id: envKey("XAI_TTS_VOICE") || "eve",
-        language: "en",
-      }),
-    });
-    if (!upstream.ok) {
-      const detail = await upstream.text();
-      return res.status(upstream.status).json({
-        error: "Grok TTS failed",
-        detail: detail.slice(0, 400),
-      });
+    if (wantStream && provider === "grok" && grokKey) {
+      try {
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.setHeader("Cache-Control", "no-store");
+        if (typeof res.flushHeaders === "function") res.flushHeaders();
+        await streamTtsWebsocket({
+          text,
+          apiKey: grokKey,
+          voice: grokVoice,
+          signal: controller.signal,
+          onChunk: (chunk) => {
+            if (!res.writableEnded) res.write(chunk);
+          },
+        });
+        logTiming("speak", Date.now() - speakStarted, `grok stream · ${text.slice(0, 40)}`);
+        if (!res.writableEnded) res.end();
+        return;
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+        if (!res.headersSent) {
+          console.error("TTS websocket failed, falling back to REST:", err.message || err);
+        } else {
+          throw err;
+        }
+      }
     }
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    res.setHeader("Content-Type", upstream.headers.get("content-type") || "audio/mpeg");
+
+    const { buf, provider: used } = await speakBuffer({
+      text,
+      provider,
+      signal: controller.signal,
+    });
+    logTiming("speak", Date.now() - speakStarted, `${used} · ${text.slice(0, 40)}`);
+    res.setHeader("Content-Type", "audio/mpeg");
     res.send(buf);
   } catch (err) {
     if (req.destroyed) return;
     if (err?.name === "AbortError") {
       if (!res.headersSent) {
         res.status(timedOut ? 504 : 499).json({
-          error: timedOut ? "Grok TTS timed out" : "Grok TTS cancelled",
+          error: timedOut ? "TTS timed out" : "TTS cancelled",
         });
+      } else if (!res.writableEnded) {
+        res.end();
       }
       return;
     }
-    res.status(502).json({ error: "Grok TTS failed", detail: String(err.message || err) });
+    if (!res.headersSent) {
+      res.status(502).json({ error: "TTS failed", detail: String(err.message || err) });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   } finally {
     clearTimeout(timer);
   }
+});
+
+app.post("/api/timing", (req, res) => {
+  const stage = String(req.body?.stage || "").slice(0, 80);
+  const ms = Number(req.body?.ms);
+  const extra = String(req.body?.extra || "").slice(0, 120);
+  if (!stage || !Number.isFinite(ms)) return res.status(204).end();
+  // Suggest + recognition are already printed when /api/suggest finishes.
+  if (stage === "suggest" || stage.startsWith("speech recognition")) {
+    return res.status(204).end();
+  }
+  logTiming(stage, ms, extra);
+  res.status(204).end();
 });
 
 app.listen(PORT, () => {
