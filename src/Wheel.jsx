@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 const ANGLE_OFFSET = (-3 * Math.PI) / 4;
 const HOLD_MS = 700;
+const LABEL_MIN_PX = 13;
 
 function slicePath(index, count, cx = 50, cy = 50, r = 46.5) {
   const a0 = (index / count) * 2 * Math.PI + ANGLE_OFFSET;
@@ -16,17 +17,44 @@ function slicePath(index, count, cx = 50, cy = 50, r = 46.5) {
 
 function labelStyle(index, count) {
   const mid = ((index + 0.5) / count) * 2 * Math.PI + ANGLE_OFFSET;
-  const d = 30;
+  const d = 28;
   return {
     left: `${50 + d * Math.cos(mid)}%`,
     top: `${50 + d * Math.sin(mid)}%`,
-    animationDelay: `${index * 0.07}s`,
   };
+}
+
+function fitSpokeLabels(root) {
+  if (!root) return;
+  root.querySelectorAll(".spoke-text").forEach((el) => {
+    const box = el.parentElement;
+    if (!box) return;
+    el.style.fontSize = "";
+    let size = parseFloat(getComputedStyle(el).fontSize);
+    while (
+      size > LABEL_MIN_PX &&
+      (el.scrollHeight > box.clientHeight - 2 || el.scrollWidth > box.clientWidth - 2)
+    ) {
+      size -= 0.5;
+      el.style.fontSize = `${size}px`;
+    }
+  });
 }
 
 export default function Wheel({ items, selected, onChoose, onHover, onHubSelect, onHubHold, busy, speaking, listening }) {
   const count = Math.max(items.length, 1);
   const pressAt = useRef(0);
+  const rootRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const run = () => fitSpokeLabels(root);
+    run();
+    const observer = new ResizeObserver(run);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [items, selected, busy]);
 
   function hoverProps(index) {
     if (!onHover) return {};
@@ -64,7 +92,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
   }
 
   return (
-    <div className={wheelClass} role="listbox" aria-label="Reply wheel" aria-busy={Boolean(busy)}>
+    <div ref={rootRef} className={wheelClass} role="listbox" aria-label="Reply wheel" aria-busy={Boolean(busy)}>
       <svg viewBox="-3 -3 106 106" className="wheel-svg" aria-hidden="true">
         {items.map((item, i) => (
           i === selected ? null : (
@@ -83,7 +111,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
             {...hoverProps(selected)}
           />
         )}
-        <circle cx="50" cy="50" r="8" className={`hub-select-bg ${selected < 0 ? "on" : ""}`} />
+        <circle cx="50" cy="50" r="8" className={`hub-select-bg ${selected >= 0 ? `tone-${selected}` : "idle"}`} />
       </svg>
 
       {items.map((item, i) => (
@@ -98,13 +126,13 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
           onClick={() => onChoose(i)}
           {...hoverProps(i)}
         >
-          {item.label}
+          <span className="spoke-text">{item.label.replace(/\u00AD/g, "")}</span>
         </button>
       ))}
 
       <button
         type="button"
-        className={`hub-select ${selected < 0 ? "on" : ""}`}
+        className={`hub-select ${selected >= 0 ? `tone-${selected}` : "idle"}`}
         aria-label={busy ? "Thinking of replies" : "Click to speak the highlighted reply. Hold for custom phrases."}
         disabled={busy}
         onPointerDown={onPointerDown}

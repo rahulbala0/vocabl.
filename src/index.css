@@ -15,7 +15,8 @@ body,
 }
 
 body {
-  font-family: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
-  background: #ffffff;
-  color: #15803d;
+  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+  background: #eef2ff;
+  color: #1e1b4b;
+  letter-spacing: -0.015em;
 }
