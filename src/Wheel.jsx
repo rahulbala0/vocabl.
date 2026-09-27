@@ -83,7 +83,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
             {...hoverProps(selected)}
           />
         )}
-        <circle cx="50" cy="50" r="14" className={`hub-select-bg ${selected < 0 ? "on" : ""}`} />
+        <circle cx="50" cy="50" r="8" className={`hub-select-bg ${selected < 0 ? "on" : ""}`} />
       </svg>
 
       {items.map((item, i) => (
@@ -113,7 +113,7 @@ export default function Wheel({ items, selected, onChoose, onHover, onHubSelect,
           pressAt.current = 0;
         }}
       >
-        {busy ? "Thinking…" : speaking ? "Speaking…" : "Speak"}
+        {busy ? "Thinking" : ""}
       </button>
     </div>
   );
