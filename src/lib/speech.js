@@ -99,11 +99,25 @@ export function createListener({ onFinal, onInterim, onError }) {
   };
 }
 
+let speakVolume = 1;
+let liveAudio = null;
+
+export function setSpeakVolume(next) {
+  const value = Number(next);
+  speakVolume = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+  if (liveAudio) liveAudio.volume = speakVolume;
+}
+
+export function getSpeakVolume() {
+  return speakVolume;
+}
+
 export function browserSpeak(text) {
   return new Promise((resolve) => {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.rate = 0.95;
+    utter.volume = speakVolume;
     utter.onend = resolve;
     utter.onerror = resolve;
     window.speechSynthesis.speak(utter);
@@ -130,6 +144,7 @@ export function previewSpeak(text, onDone) {
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.rate = 1.05;
+  utter.volume = speakVolume;
   utter.onend = finish;
   utter.onerror = finish;
   window.speechSynthesis.speak(utter);
@@ -242,11 +257,14 @@ async function streamAndPlayInner(text, signal) {
   const mediaSource = new MediaSource();
   const objectUrl = URL.createObjectURL(mediaSource);
   const audio = new Audio(objectUrl);
+  audio.volume = speakVolume;
+  liveAudio = audio;
 
   await new Promise((resolve, reject) => {
     const fail = (err) => {
       audio.onended = null;
       audio.onerror = null;
+      if (liveAudio === audio) liveAudio = null;
       reject(err);
     };
     mediaSource.addEventListener("sourceopen", async () => {
@@ -284,6 +302,7 @@ async function streamAndPlayInner(text, signal) {
         const prevEnded = audio.onended;
         audio.onended = () => {
           clearTimeout(timer);
+          if (liveAudio === audio) liveAudio = null;
           prevEnded?.();
         };
       } catch (err) {
@@ -292,6 +311,7 @@ async function streamAndPlayInner(text, signal) {
     }, { once: true });
   });
 
+  if (liveAudio === audio) liveAudio = null;
   URL.revokeObjectURL(objectUrl);
   const blob = new Blob(chunks, { type: "audio/mpeg" });
   return { url: URL.createObjectURL(blob), ms: firstMs || performance.now() - t0 };
@@ -349,9 +369,15 @@ function createTtsQueue(limit = 2) {
 function playUrl(url) {
   return new Promise((resolve, reject) => {
     const audio = new Audio(url);
-    audio.onended = resolve;
-    audio.onerror = reject;
-    audio.play().catch(reject);
+    audio.volume = speakVolume;
+    liveAudio = audio;
+    const done = (fn) => (err) => {
+      if (liveAudio === audio) liveAudio = null;
+      fn(err);
+    };
+    audio.onended = done(() => resolve());
+    audio.onerror = done(reject);
+    audio.play().catch(done(reject));
   });
 }
 

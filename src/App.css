@@ -165,8 +165,8 @@ button.live:hover:not(:disabled) {
 }
 
 .mic-toggle {
-  flex: 1.35 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 132px;
   height: auto;
   width: 112px;
   padding: 10px 8px;
@@ -187,9 +187,47 @@ button.live:hover:not(:disabled) {
   flex-direction: column;
   gap: 8px;
   width: 112px;
-  height: min(340px, calc(100vh - 170px));
+  height: auto;
+  max-height: calc(100vh - 120px);
   justify-self: start;
   align-self: center;
+}
+
+.vol-control {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 112px;
+  padding: 8px 0 6px;
+  border: 1.5px solid #166534;
+  border-radius: 20px;
+  background: #f0fdf4;
+  color: #14532d;
+}
+
+.vol-control input[type="range"] {
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 28px;
+  height: 84px;
+  margin: 0;
+  accent-color: #166534;
+  cursor: pointer;
+}
+
+.vol-mark {
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.vol-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .side-btn {
@@ -206,8 +244,8 @@ button.live:hover:not(:disabled) {
 }
 
 .side-btn-sm {
-  flex: 0.65 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 72px;
 }
 
 .side-icon {
@@ -1165,6 +1203,15 @@ button.live:hover:not(:disabled) {
     width: 84px;
     height: auto;
     gap: 6px;
+  }
+
+  .vol-control {
+    width: 84px;
+    padding: 6px 0 4px;
+  }
+
+  .vol-control input[type="range"] {
+    height: 64px;
   }
 
   .side-btn,

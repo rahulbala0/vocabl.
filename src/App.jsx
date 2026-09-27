@@ -10,6 +10,7 @@ import {
   createVoiceCache,
   logTiming,
   previewSpeak,
+  setSpeakVolume,
   speechRecognitionSupported,
   stopPreview,
   usesCloudVoice,
@@ -79,6 +80,10 @@ export default function App() {
   const voiceCacheRef = useRef(null);
   const recognizeMsRef = useRef(0);
   if (!voiceCacheRef.current) voiceCacheRef.current = createVoiceCache();
+
+  useEffect(() => {
+    setSpeakVolume(settings.speakVolume);
+  }, [settings.speakVolume]);
 
   settingsRef.current = settings;
   selectedRef.current = selected;
@@ -624,6 +629,25 @@ export default function App() {
         <div className="wheel-pane">
           <div className="wheel-stage">
             <div className="side-controls">
+              <label className="vol-control">
+                <span className="vol-mark" aria-hidden="true">+</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={Math.round((Number(settings.speakVolume) || 0) * 100)}
+                  onChange={(e) => {
+                    const next = Number(e.target.value) / 100;
+                    setSpeakVolume(next);
+                    persist({ ...settings, speakVolume: next });
+                  }}
+                  aria-label="Speaking volume"
+                  title={`Speaking volume ${Math.round((Number(settings.speakVolume) || 0) * 100)}%`}
+                />
+                <span className="vol-mark" aria-hidden="true">−</span>
+                <span className="vol-label">Volume</span>
+              </label>
               <button
                 type="button"
                 className={`side-btn mic-toggle${listening ? " is-on" : ""}`}
